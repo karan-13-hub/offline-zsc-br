@@ -1,0 +1,22 @@
+Loading data using 255 processes...
+Processing chunk 65536 to 67148
+publ_s_chunk: torch.Size([1612, 80, 2, 533]) for 65536 to 67148
+priv_s_chunk: torch.Size([1612, 80, 2, 658]) for 65536 to 67148
+legal_move_chunk: torch.Size([1612, 80, 2, 21]) for 65536 to 67148
+action_chunk: torch.Size([1612, 80, 2]) for 65536 to 67148
+reward_chunk: torch.Size([1612, 80]) for 65536 to 67148
+terminal_chunk: torch.Size([1612, 80]) for 65536 to 67148
+Processing chunk 24576 to 32768
+publ_s_chunk: torch.Size([8192, 80, 2, 533]) for 24576 to 32768
+priv_s_chunk: torch.Size([8192, 80, 2, 658]) for 24576 to 32768
+legal_move_chunk: torch.Size([8192, 80, 2, 21]) for 24576 to 32768
+action_chunk: torch.Size([8192, 80, 2]) for 24576 to 32768
+reward_chunk: torch.Size([8192, 80]) for 24576 to 32768
+terminal_chunk: torch.Size([8192, 80]) for 24576 to 32768
+Processing chunk 32768 to 40960
+publ_s_chunk: torch.Size([8192, 80, 2, 533]) for 32768 to 40960
+priv_s_chunk: torch.Size([8192, 80, 2, 658]) for 32768 to 40960
+legal_move_chunk: torch.Size([8192, 80, 2, 21]) for 32768 to 40960
+action_chunk: torch.Size([8192, 80, 2]) for 32768 to 40960
+reward_chunk: torch.Size([8192, 80]) for 32768 to 40960
+terminal_chunk: torch.Size([8192, 80]) for 32768 to 40960
