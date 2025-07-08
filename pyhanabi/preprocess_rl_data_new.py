@@ -20,10 +20,9 @@ def load_data(filename):
     
     return data['obs'], data['action'], data['reward'], data['terminal']
 
-def process_file(observations, actions, rewards, terminals, filename):
+def process_file(observations, actions, rewards, terminals, args):
 
-    folder_name = filename.split('/')[-1].split('.')[0]
-    dir_name = f'/data/kmirakho/vdn-offline-data-seed1234/{folder_name}'
+    dir_name = f'/data/kmirakho/vdn-offline-data-seed-31337/data_{args.file_num}'
     print("Saving to: ", dir_name)
     # if os.path.exists(dir_name): print("Warning: Folder exist!!")
     os.makedirs(dir_name, exist_ok=True)
@@ -45,12 +44,12 @@ def process_file(observations, actions, rewards, terminals, filename):
 if __name__ == "__main__":
     args = parse_args()
     # for filename in filenames:
-    filename = f'/data/kmirakho/vdn-offline-data-seed1234/data_vdn_{args.file_num}.pickle'
+    filename = f'/data/kmirakho/vdn_offline_data_seed_31337/data_obl_{args.file_num}.pickle'
     # filename = filenames[args.file_num]
     print(f"Processing file: {filename}")
     observations, actions, rewards, terminals = load_data(filename)
     print(f"Loaded data from {filename}")
-    process_file(observations, actions, rewards, terminals, filename)
+    process_file(observations, actions, rewards, terminals, args)
     # observations, actions, rewards, terminals = load_data(filenames)
     # dataset = preprocess_data(observations, actions, rewards, terminals)
     # dataset = preprocess_data(observations, actions, rewards, terminals)

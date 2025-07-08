@@ -5,9 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 #
 #!/bin/bash
-python selfplay_mi_cl_br.py \
+python selfplay_mi_cl.py \
        --clu_mod_dir exps/mi_cluster_medium_data_80_seed9 \
-       --save_dir exps/mi_cluster_medium_data_80_seed9/vdn_seed9_bc_0.4 \
+       --save_dir exps/div_agents_medium_data_80/vdn_seed9_bc_0.4_sd_10_div_0.05 \
        --num_thread 40 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -37,12 +37,12 @@ python selfplay_mi_cl_br.py \
        --save_model_after 25 \
        --num_player 2 \
        --rnn_hid_dim 512 \
-       --num_agents 3\
+       --num_agents 2\
        --multi_step 3 \
        --prefetch 50 \
-       --div_weight 0.0\
+       --div_weight 0.05\
        --div_type jsd\
-       --start_div 0\
+       --start_div 10\
        --bc True \
        --bc_weight 0.4\
        --decay_bc 0\
@@ -52,5 +52,5 @@ python selfplay_mi_cl_br.py \
        --train_device cuda:1 \
        --dataset_path /data/kmirakho/vdn-offline-data/data_80\
        --wgt_thr 0.25\
-       # --div True\
-       # --cp True\
+       --div True\
+       --cp True\

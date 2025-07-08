@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 def parse_args():
     parser = argparse.ArgumentParser(description="train dqn on hanabi")
-    parser.add_argument("--save_dir", type=str, default="exps/exp1")
+    parser.add_argument("--save_dir", type=str, default="exps/br_medium_data_seed_9_42_1234_1e9+7/vdn_cp_bc_0.4")
     parser.add_argument("--method", type=str, default="vdn")
     parser.add_argument("--shuffle_color", type=int, default=0)
     parser.add_argument("--aux_weight", type=float, default=0)
@@ -31,7 +31,7 @@ def parse_args():
 
     parser.add_argument("--load_model", type=str, default="")
     parser.add_argument("--load_bc_model", type=str, default="", help="path to pre-trained BC model")
-    parser.add_argument("--clu_mod_dir", type=str, default="exps/mi_cluster_medium_data_80_seed9")
+    parser.add_argument("--clu_mod_dir", type=str, default="exps/br_medium_data_seed_9_42_1234_1e9+7/")
     parser.add_argument("--clone_bot", type=str, default="", help="behavior clone loss")
     parser.add_argument("--clone_weight", type=float, default=0.0)
     parser.add_argument("--clone_t", type=float, default=0.02)
@@ -496,12 +496,12 @@ def load_cluster(cluster_save_path, model_save_path, args):
         print(f"Found existing cluster information at {cluster_save_path}")
         cluster_data = torch.load(cluster_save_path)
         cluster_centers = cluster_data['cluster_centers']
-        cluster_labels = cluster_data['cluster_labels']
-        print("\nCluster Statistics:")
-        unique_labels, counts = np.unique(cluster_labels.numpy(), return_counts=True)
-        n_samples = len(cluster_labels)
-        for label, count in zip(unique_labels, counts):
-            print(f"Cluster {label}: {count} samples ({count/n_samples*100:.2f}%)")
+        # cluster_labels = cluster_data['cluster_labels']
+        # print("\nCluster Statistics:")
+        # unique_labels, counts = np.unique(cluster_labels.numpy(), return_counts=True)
+        # n_samples = len(cluster_labels)
+        # for label, count in zip(unique_labels, counts):
+        #     print(f"Cluster {label}: {count} samples ({count/n_samples*100:.2f}%)")
         
         # Convert to PyTorch tensors for efficient computation
         cluster_centers_tensor = cluster_centers.to(args.train_device)
@@ -515,6 +515,11 @@ def load_cluster(cluster_save_path, model_save_path, args):
         return encoder, cluster_centers_tensor
 
 def plot_tsne(batch_loader, cluster_save_path, model_save_path, args):
+    #extract all the folder names except the last one
+    folder_names = args.save_dir.split('/')[:-1]
+    folder_names = '/'.join(folder_names)
+    plt_save_path = 'tsne_plot.png'  # Define plt_save_path before using it
+    plt_save_path = os.path.join(folder_names, plt_save_path)
     encoder, _ = load_cluster(cluster_save_path, model_save_path, args)
     all_lstm_o = []
     epoch_bar = tqdm(batch_loader, desc=f'Finding lstm_o', bar_format='{l_bar}{bar:20}{r_bar}', leave=True)
@@ -538,7 +543,7 @@ def plot_tsne(batch_loader, cluster_save_path, model_save_path, args):
     plt.scatter(lstm_o_tsne[:, 0], lstm_o_tsne[:, 1], c=cluster_labels, cmap='viridis')
     # plt.legend(args.num_agents)
     plt.colorbar()
-    plt.savefig(os.path.join(args.clu_mod_dir, 'tsne_plot.png'))
+    plt.savefig(plt_save_path)
     plt.close()
 
 if __name__ == "__main__":

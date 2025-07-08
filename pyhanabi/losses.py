@@ -136,6 +136,139 @@ def td_error(
     # Return both sets of values and the errors
     return err_1_2, err_2_1, ag1_online_q_diversity, ag2_online_q_diversity, mask
 
+
+def td_error_br(
+    agent,
+    agent_br,
+    obs: Dict[str, torch.Tensor],
+    hid: Dict[str, torch.Tensor],
+    action: Dict[str, torch.Tensor],
+    reward: torch.Tensor,
+    terminal: torch.Tensor,
+    bootstrap: torch.Tensor,
+    seq_len: torch.Tensor,
+    args
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    
+    max_seq_len = obs["priv_s"].size(0)
+    priv_s = obs["priv_s"]
+    publ_s = obs["publ_s"]
+    legal_move = obs["legal_move"]
+    action = action["a"]
+    
+    bsize = priv_s.size(1)
+    num_player = priv_s.size(2)
+    priv_s = priv_s.flatten(1, 2)
+    publ_s = publ_s.flatten(1, 2)
+    legal_move = legal_move.flatten(1, 2)
+    action = action.flatten(1, 2)
+    
+    # this only works because the trajectories are padded,
+    # i.e. no terminal in the middle
+    new_hid = get_new_hid(hid)
+    ag1_online_qa, ag1_greedy_a, ag1_online_q, _ = agent.online_net(
+        priv_s, publ_s, legal_move, action, new_hid
+    )
+
+    new_hid = get_new_hid(hid)
+    ag1_target_qa, _, ag1_target_q, _ = agent.target_net(
+        priv_s, publ_s, legal_move, ag1_greedy_a, new_hid
+    )
+
+    new_hid = get_new_hid(hid)
+    ag2_online_qa, ag2_greedy_a, ag2_online_q, _ = agent_br.online_net(
+        priv_s, publ_s, legal_move, action, new_hid
+    )
+    
+    new_hid = get_new_hid(hid)
+    ag2_target_qa, _, _, _ = agent_br.target_net(
+        priv_s, publ_s, legal_move, ag2_greedy_a, new_hid
+    )
+
+    #detach agent's q values
+    ag1_online_qa = ag1_online_qa.detach()
+    ag1_online_q_div = ag1_online_q.clone()
+    ag1_online_q = ag1_online_q.detach()
+    ag1_target_qa = ag1_target_qa.detach()
+
+    # Reshape the Q-values
+    ag1_online_qa = ag1_online_qa.view(max_seq_len, bsize, num_player)
+    ag2_online_qa = ag2_online_qa.view(max_seq_len, bsize, num_player)
+    ag1_online_q = ag1_online_q.view(max_seq_len, bsize, num_player, -1)
+    ag2_online_q = ag2_online_q.view(max_seq_len, bsize, num_player, -1)
+    ag1_online_q_div = ag1_online_q_div.view(max_seq_len, bsize, num_player, -1)
+
+    # Reshape the target Q-values
+    ag1_target_qa = ag1_target_qa.view(max_seq_len, bsize, num_player)
+    ag2_target_qa = ag2_target_qa.view(max_seq_len, bsize, num_player)
+    # ag1_target_q = ag1_target_q.view(max_seq_len, bsize, num_player, -1)
+    # ag2_target_q = ag2_target_q.view(max_seq_len, bsize, num_player, -1)
+    
+    # Get the action dimension from the Q-values
+    action_dim = ag1_online_q.size(-1)
+    
+    # Create masks for alternating between agents
+    # For even indices (0, 2, 4, ...) use agent 1, for odd indices (1, 3, 5, ...) use agent 2
+    even_mask = torch.zeros(max_seq_len, bsize, num_player, action_dim, device=ag1_online_q.device)
+    odd_mask = torch.zeros(max_seq_len, bsize, num_player, action_dim, device=ag1_online_q.device)
+    
+    # Create masks for each player
+    for i in range(num_player):
+        if i % 2 == 0:
+            even_mask[:, :, i, :] = 1
+        else:
+            odd_mask[:, :, i, :] = 1
+    
+    # Create cross-play Q-values for agent 1 as player 1, agent 2 as player 2
+    online_qa_1_2 = (ag1_online_qa * even_mask[:, :, :, 0] + ag2_online_qa * odd_mask[:, :, :, 0]).sum(-1)
+    target_qa_1_2 = (ag1_target_qa * even_mask[:, :, :, 0] + ag2_target_qa * odd_mask[:, :, :, 0]).sum(-1)
+
+    online_q_1_2 = (ag1_online_q * even_mask[:, :, :, :] + ag2_online_q * odd_mask[:, :, :, :])
+    online_q_1_2 = online_q_1_2.view(max_seq_len, bsize*num_player, -1)
+    
+    # Process target Q-values for both agent combinations
+    target_qa_1_2 = torch.cat(
+        [target_qa_1_2[args.multi_step :], target_qa_1_2[: args.multi_step]], 0
+    )
+    target_qa_1_2[-args.multi_step :] = 0
+    
+    # Create target values for both agent combinations
+    target_1_2 = reward + bootstrap * (args.gamma ** args.multi_step) * target_qa_1_2
+    
+    # Verify target sizes
+    assert target_1_2.size() == reward.size()
+    
+    # Create mask for valid sequences
+    mask = torch.arange(0, max_seq_len, device=seq_len.device)
+    mask = (mask.unsqueeze(1) < seq_len.unsqueeze(0)).float()
+    
+    # Calculate error for both agent combinations
+    err_1_2 = (target_1_2.detach() - online_qa_1_2) * mask
+    
+    # Compute policy diversity between online_q_1_2 and online_q_2_1 at specific indices
+    # Create indices for (0,0), (1,1), (2,0), (3,1), (4,0), (5,1), ...
+    # More efficient: use torch.arange instead of loops
+    seq_indices = torch.arange(max_seq_len, device=ag1_online_q.device)
+    player_indices = seq_indices % 2  # 0 for even indices, 1 for odd indices
+    
+    # Extract Q-values at the specified indices - more efficient indexing
+    # Do not apply the mask to the Q-values
+    ag1_online_q_diversity = ag1_online_q_div[seq_indices, :, player_indices, :]
+    if args.bc:
+        legal_q = (1 + online_q_1_2 - online_q_1_2.min()) * legal_move
+        legal_logit = nn.functional.softmax(legal_q, -1)
+        gt_logit = torch.zeros_like(legal_logit, dtype=torch.float32)
+        gt_logit.scatter_(2, action.unsqueeze(-1), 1)
+        gt_logit = gt_logit.view(-1, online_q_1_2.shape[-1])
+        legal_logit = legal_logit.view(-1, online_q_1_2.shape[-1])
+        bc_loss = torch.nn.functional.cross_entropy(legal_logit, gt_logit, reduction="none")
+        if args.method == "vdn":
+            bc_loss = bc_loss.view(max_seq_len, bsize, num_player).sum(-1)
+    else :
+        bc_loss = torch.zeros(1, device=err_1_2.device)
+    # Return both sets of values and the errors
+    return err_1_2, ag1_online_q_diversity, bc_loss, mask
+
 def cp_loss(agents_1, agents_2, batch, stat, args):
     err_1_2, err_2_1, ag1_online_q_diversity, ag2_online_q_diversity, valid_mask = td_error(
         agents_1,
@@ -161,9 +294,9 @@ def cp_loss(agents_1, agents_2, batch, stat, args):
 
     return loss, ag1_online_q_diversity, ag2_online_q_diversity, valid_mask
 
-def get_new_hid(h0):
+def get_new_hid(hid):
     new_hid = {}
-    for k, v in h0.items():
+    for k, v in hid.items():
         new_hid[k] = v.clone().flatten(1, 2).contiguous()
     return new_hid
 
@@ -240,6 +373,36 @@ def q_ensemble_loss(agent_br, agents, agent_weights, batch, args):
     )
     rl_loss = rl_loss.sum(0)    
     return rl_loss
+
+def train_br_agent(agent_br, agents, agent_weights, batch, args):   
+    cp_loss = torch.tensor(0.0, device=args.train_device)
+    online_q_values = []
+    valid_masks = []
+    for i, agent in enumerate(agents):
+        err, online_q_diversity, bc_loss, valid_mask = td_error_br(
+            agent,
+            agent_br,
+            batch.obs,
+            batch.h0,
+            batch.action,
+            batch.reward,
+            batch.terminal,
+            batch.bootstrap,
+            batch.seq_len,
+            args,
+        )
+        rl_loss = nn.functional.smooth_l1_loss(
+            err, torch.zeros_like(err), reduction="none"
+        )
+        rl_loss = rl_loss.sum(0)
+        bc_loss = bc_loss.sum(0)
+
+        cp_loss = cp_loss + agent_weights[i] * rl_loss
+        online_q_values.append(online_q_diversity)
+        valid_masks.append(valid_mask)
+    cp_loss = cp_loss + args.cp_bc_weight * bc_loss
+    return cp_loss, online_q_values, valid_masks
+
 
 def diversity_loss(q_values, valid_masks, args, agent_ID):
     """

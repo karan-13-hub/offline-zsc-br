@@ -377,13 +377,20 @@ class LoadDataset:
         #Small replay dataset
         # folders = ['/data/kmirakho/vdn-offline-data-seed1234/data_vdn_80']
         # folders = ['/data/kmirakho/vdn-offline-data/data_20', '/data/kmirakho/vdn-offline-data/data_40', '/data/kmirakho/vdn-offline-data/data_80']
-        folders = ['/data/kmirakho/vdn-offline-data/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_vdn_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_80', '/data/kmirakho/vdn-offline-data-seed-42/data_80']
+        folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
 
 
         filenames = []
         for folder in folders:
             print(f"Loading dataset from {folder}")
-            filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
+            #randomly select 50% of the files from each folder
+            files = glob(os.path.join(self.data_path, folder, '*.npz'))
+            files = random.sample(files, int(len(files) * 0.5))
+            filenames.extend(files)
+            # filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
         # filenames = filenames[:1000]
         # #load the filenames from the split1.txt file
         # print(f"Loading dataset from split1.txt")
