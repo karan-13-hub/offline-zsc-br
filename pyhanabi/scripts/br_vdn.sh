@@ -5,11 +5,13 @@
 # LICENSE file in the root directory of this source tree.
 #
 #!/bin/bash
-python selfplay_wo_rb.py \
-       --save_dir /data/kmirakho/vdn-offline-data-seed-777/exps/train_data_seed_777/vdn_wo_lstm_bc_0.01_cql_1_ms_1\
+python best_response.py \
+       --save_dir /data/kmirakho/br_vdn/exps/train_-offline-data-seed-9-42-1234/br_vdn_lstm\
+       --coop_agents pyhanabi/exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35/model_seed_9_agent_0_epoch_150.pthw pyhanabi/exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35/model_seed_9_agent_1_epoch_150.pthw pyhanabi/exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35/model_seed_9_agent_2_epoch_150.pthw pyhanabi/exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35/model_seed_9_agent_3_epoch_150.pthw\
+       --method vdn \
+       --mode br \
        --num_thread 40 \
        --num_game_per_thread 80 \
-       --num_data_thread 4 \
        --method vdn \
        --sad 0 \
        --act_base_eps 0.1 \
@@ -27,20 +29,11 @@ python selfplay_wo_rb.py \
        --num_lstm_layer 2 \
        --priority_exponent 0.9 \
        --priority_weight 0.6 \
-       --visit_weight 0.5 \
        --train_bomb 0 \
        --eval_bomb 0 \
-       --load_after 5 \
-       --num_eval_after 1 \
-       --save_model_after 100 \
        --num_player 2 \
        --rnn_hid_dim 512 \
        --multi_step 1 \
        --prefetch 50 \
-       --bc True \
-       --bc_weight 0.01 \
-       --cql True \
-       --cql_weight 1.0 \
        --act_device cuda:2,cuda:3 \
-       --train_device cuda:2 \
-       --dataset_path /data/kmirakho/vdn-offline-data-seed-777/data_80
+       --train_device cuda:1 \

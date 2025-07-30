@@ -22,7 +22,7 @@ def load_data(filename):
 
 def process_file(observations, actions, rewards, terminals, args):
 
-    dir_name = f'/data/kmirakho/vdn-offline-data-seed-31337/data_{args.file_num}'
+    dir_name = f'/data/kmirakho/vdn-offline-data-seed-777/data_{args.file_num}'
     print("Saving to: ", dir_name)
     # if os.path.exists(dir_name): print("Warning: Folder exist!!")
     os.makedirs(dir_name, exist_ok=True)
@@ -30,6 +30,7 @@ def process_file(observations, actions, rewards, terminals, args):
     idx = 0
     for obs, act, rew, term in tqdm(zip(observations, actions, rewards, terminals), total=len(observations), desc="Processing trajectories"):
         data = {}
+        import pdb; pdb.set_trace()
         data['publ_s'] = np.array(obs['publ_s'],dtype=np.float32)
         data['priv_s'] = np.array(obs['priv_s'],dtype=np.float32)
         data['legal_move'] = np.array(obs['legal_move'],dtype=np.bool_)
@@ -44,7 +45,7 @@ def process_file(observations, actions, rewards, terminals, args):
 if __name__ == "__main__":
     args = parse_args()
     # for filename in filenames:
-    filename = f'/data/kmirakho/vdn_offline_data_seed_31337/data_obl_{args.file_num}.pickle'
+    filename = f'/data/kmirakho/vdn_offline_data_seed_777/data_obl_{args.file_num}.pickle'
     # filename = filenames[args.file_num]
     print(f"Processing file: {filename}")
     observations, actions, rewards, terminals = load_data(filename)

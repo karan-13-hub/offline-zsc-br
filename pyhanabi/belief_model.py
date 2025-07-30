@@ -97,8 +97,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
             nn.Linear(self.hid_dim, self.hid_dim),
             nn.ReLU(),
         )
-        print("lanja")
-        import pdb; pdb.set_trace()
+
         self.lstm = nn.LSTM(
             self.hid_dim,
             self.hid_dim,

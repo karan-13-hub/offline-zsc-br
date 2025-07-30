@@ -15,7 +15,7 @@ import torch.nn as nn
 from typing import Tuple, Dict, Optional
 import common_utils
 import math
-
+import pdb
 
 
 @torch.jit.script
@@ -307,6 +307,12 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         ).to(device)
         self.lstm.flatten_parameters()
 
+        # self.lstm_2 = nn.Sequential(
+        #     nn.Linear(self.hid_dim, self.hid_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(self.hid_dim, self.hid_dim),
+        # ).to(device)
+
         self.fc_v = nn.Linear(self.hid_dim, 1)
         self.fc_a = nn.Linear(self.hid_dim, self.out_dim)
 
@@ -319,7 +325,7 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
 
-    @torch.jit.script_method
+    # @torch.jit.script_method
     def act(
         self,
         priv_s: torch.Tensor,
@@ -341,8 +347,13 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         publ_s = publ_s.unsqueeze(0)
     
         x = self.publ_net(publ_s)
+        
+        # KARAN
+        # publ_o = self.lstm_2(x)
+        # (h, c) = (hid["h0"], hid["c0"])
         publ_o, (h, c) = self.lstm(x, (hid["h0"], hid["c0"]))
-
+        # KARAN
+        
         priv_o = self.priv_net(priv_s)
         o = priv_o * publ_o
         a = self.fc_a(o)
@@ -383,10 +394,15 @@ class PublicLSTMNet(torch.jit.ScriptModule):
             one_step = True
 
         x = self.publ_net(publ_s)
+        # KARAN
         if len(hid) == 0:
             publ_o, _ = self.lstm(x)
         else:
             publ_o, _ = self.lstm(x, (hid["h0"], hid["c0"]))
+        
+        # KARAN
+        # publ_o = self.lstm_2(x)
+
         priv_o = self.priv_net(priv_s)
         o = priv_o * publ_o
         a = self.fc_a(o)

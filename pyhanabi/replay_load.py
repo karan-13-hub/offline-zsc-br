@@ -359,6 +359,48 @@ class LoadDataset:
         self.terminal = []
         self.seq_len = []
 
+    def _process_reward_sequence(self, reward, multi_step=3, gamma=0.999, new_multi_step=3):
+        """
+        Process each reward in the sequence one by one. This can be used for multi-step reward adjustment or other per-step processing.
+        """
+        discount_factors = np.array([1.0 / (gamma ** i) for i in range(1, multi_step)])
+        reward_array = reward.numpy()
+        reward_length = len(reward_array)
+        adjusted_rewards = np.zeros_like(reward_array)
+
+        # Combine both loops
+        for i in range(reward_length):
+            if i <= reward_length - multi_step:
+                pos = reward_length - multi_step - i
+                future_rewards = adjusted_rewards[pos+1:pos+multi_step]
+                factors = discount_factors[:len(future_rewards)]
+                discounted_sum = np.sum(future_rewards * factors)
+                adjusted_rewards[pos] = reward_array[pos] - discounted_sum
+                adjusted_rewards[pos] = round(adjusted_rewards[pos], 1)
+            else:
+                pos = i
+                future_rewards = adjusted_rewards[pos+1:reward_length]
+                factors = discount_factors[:len(future_rewards)]
+                discounted_sum = np.sum(future_rewards * factors)
+                adjusted_rewards[pos] = reward_array[pos] - discounted_sum
+
+        # Adjust the rewards for the new multi step
+        discount_factors = np.array([gamma ** i for i in range(1, new_multi_step)])
+        for i in range(reward_length):
+            pos = i
+            if i <= reward_length - new_multi_step:
+                future_rewards = adjusted_rewards[pos+1:pos+new_multi_step]
+                discounted_sum = np.sum(future_rewards * discount_factors[:len(future_rewards)])
+                adjusted_rewards[pos] = adjusted_rewards[pos] + discounted_sum
+            else:
+                pos = i
+                future_rewards = adjusted_rewards[pos+1:reward_length]
+                discounted_sum = np.sum(future_rewards * discount_factors[:len(future_rewards)])
+                adjusted_rewards[pos] = adjusted_rewards[pos] + discounted_sum
+
+        adjusted_rewards = torch.from_numpy(adjusted_rewards).to(torch.float32, non_blocking=True)
+        return adjusted_rewards
+
     def load(self):     
         # Prepare the hidden state once (reused for all experiences)
         shape = (self.num_lstm_layer, self.num_agents, self.hid_dim)
@@ -377,10 +419,14 @@ class LoadDataset:
         #Small replay dataset
         # folders = ['/data/kmirakho/vdn-offline-data-seed1234/data_vdn_80']
         # folders = ['/data/kmirakho/vdn-offline-data/data_20', '/data/kmirakho/vdn-offline-data/data_40', '/data/kmirakho/vdn-offline-data/data_80']
-        # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_80', '/data/kmirakho/vdn-offline-data-seed-42/data_80']
-        folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_80']#, '/data/kmirakho/vdn-offline-data-seed-42/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_20','/data/kmirakho/vdn-offline-data-seed-777/data_40','/data/kmirakho/vdn-offline-data-seed-777/data_80']
+        folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-31337/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80']
-        # folders = ['/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
+        # folders = ['/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80'] 
 
 
         filenames = []
@@ -388,10 +434,10 @@ class LoadDataset:
             print(f"Loading dataset from {folder}")
             #randomly select 50% of the files from each folder
             files = glob(os.path.join(self.data_path, folder, '*.npz'))
-            files = random.sample(files, int(len(files) * 0.5))
+            # files = random.sample(files, int(len(files) * 0.5))
             filenames.extend(files)
             # filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
-        # filenames = filenames[:1000]
+        filenames = filenames[:1000]
         # #load the filenames from the split1.txt file
         # print(f"Loading dataset from split1.txt")
         # with open('/data/kmirakho/vdn-offline-data/split_medium_replay_in_2/split1.txt', 'r') as f:
@@ -471,11 +517,20 @@ class LoadDataset:
             priv_s = torch.from_numpy(result['priv_s']).to(torch.float32, non_blocking=True)
             legal_move = torch.from_numpy(result['legal_move']).to(torch.bool, non_blocking=True)
             action = torch.from_numpy(result['action']).to(torch.int64, non_blocking=True)
-            reward = torch.from_numpy(result['reward']).to(torch.float32, non_blocking=True)
             terminal = torch.from_numpy(result['terminal']).to(torch.bool, non_blocking=True)
             bootstrap = torch.from_numpy(result['bootstrap']).to(torch.bool, non_blocking=True)
+            # change the bootstrap according to the multi step
+            # bootstrap is a boolean tensor of shape (seq_len, num_agents)
+            # basically bootstrap is terminal (for seq len) - multi_step
+            # import pdb; pdb.set_trace()
+            bootstrap = ~terminal
             seq_len = torch.tensor(result['seq_len'], dtype=torch.int32)
-            
+            bootstrap[seq_len - self.multi_step:seq_len] = False
+            reward = torch.from_numpy(result['reward']).to(torch.float32, non_blocking=True)
+
+            # Process the reward sequence one by one
+            reward = self._process_reward_sequence(reward, gamma=self.args.gamma, new_multi_step=self.multi_step)
+
             # Create experience and add to memory
             self.publ_s.append(publ_s)
             self.priv_s.append(priv_s)
@@ -663,7 +718,10 @@ if __name__ == "__main__":
 
     dataset_loader = LoadDataset(args)
     train_dataset = dataset_loader.load()
+    import pdb; pdb.set_trace()
     dataset_rewards = train_dataset[5]
+    if not os.path.exists('/data/kmirakho/vdn-offline-data-seed-777/data_rewards'):
+        os.makedirs('/data/kmirakho/vdn-offline-data-seed-777/data_rewards')
     # rewards = []
     # # import pdb; pdb.set_trace()
     # for i in range(len(dataset_rewards)):
@@ -696,7 +754,7 @@ if __name__ == "__main__":
         # Convert back to tensor and add to the new dataset
         actual_dataset_rewards.append(adjusted_rewards.sum())
     actual_dataset_rewards = np.array(actual_dataset_rewards)
-    np.save('/data/kmirakho/vdn-offline-data-seed1234/data_rewards/rewards_data_80.npy', actual_dataset_rewards)
+    np.save('/data/kmirakho/vdn-offline-data-seed-777/data_rewards/rewards_data_80.npy', actual_dataset_rewards)
     
     # Replace the original rewards with the adjusted ones
     # train_dataset = list(train_dataset)
@@ -719,7 +777,6 @@ if __name__ == "__main__":
     # )
     # print("Dataset loaded.")
     # for batch in tqdm(batch_loader):
-    #     start_time = time.time()
     #     sample, weights = process_batch(batch, args)
     # for i in tqdm(range(10000000)):
     #     sample, weights = replay_buffer.sample()  

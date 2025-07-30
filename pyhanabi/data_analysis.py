@@ -8,7 +8,7 @@ import os
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="/data/kmirakho/vdn-offline-data-seed1234/data_rewards")
-    parser.add_argument("--save_path", type=str, default="/data/kmirakho/vdn-offline-data-seed1234/data_rewards/reward_distribution")
+    parser.add_argument("--save_path", type=str, default="/data/kmirakho/vdn-offline-data-seed-777/data_rewards/reward_distribution")
     parser.add_argument("--exps_path", type=str, default="./exps/train_br_seed9")
     parser.add_argument("--include", type=str, default="")
     parser.add_argument("--exclude", type=str, default="")
@@ -33,6 +33,7 @@ class PlotRewardDistribution:
             self.plot_reward_distribution()
             self.plot_reward_distribution_with_mean()
             self.plot_reward_distribution_with_mean_and_std()
+            self.save_rewards_info()
         
         if multiple_filenames is not None:
             self.plot_multiple_reward_distribution(multiple_filenames)
@@ -91,9 +92,21 @@ class PlotRewardDistribution:
         plt.axvline(self.rewards.mean(), color='r', linestyle='dashed', linewidth=2)
         plt.axvline(self.rewards.mean() + self.rewards.std(), color='g', linestyle='dashed', linewidth=2)
         plt.axvline(self.rewards.mean() - self.rewards.std(), color='g', linestyle='dashed', linewidth=2)
-        plt.savefig(self.plot_name + "_distribution_with_mean_and_std.png")
+        plt.savefig(self.plot_name + "_distribution_with_mean_and_std.png") 
         plt.close()
         plt.clf()
+    
+    def save_rewards_info(self):
+        #save the rewards info to a json file
+        with open(self.plot_name + "_rewards_info.txt", "w") as f:
+            f.write("Mean: " + str(self.rewards.mean()) + "\n")
+            f.write("Std: " + str(self.rewards.std()) + "\n")
+            f.write("Min: " + str(self.rewards.min()) + "\n")
+            f.write("Max: " + str(self.rewards.max()) + "\n")
+            f.write("Median: " + str(np.median(self.rewards)) + "\n")
+            f.write("25th Percentile: " + str(np.percentile(self.rewards, 25)) + "\n")
+            f.write("75th Percentile: " + str(np.percentile(self.rewards, 75)) + "\n")
+
 
 #class for analyzing the training logs
 class PlotTrainingLogs:
@@ -138,17 +151,24 @@ class PlotTrainingLogs:
             epochs = []
             scores = []
             for line in log:
-                if "epoch" in line and "agent 0 eval score" in line:
+                if "epoch" in line and "eval score:" in line:
                     line = line.split(",")
                     ep_strt = line[0].find("epoch ")+len("epoch ")
                     sc_strt = line[1].find("score:")+len("score: ")
                     epochs.append(int(line[0][ep_strt:]))
                     scores.append(float(line[1][sc_strt:]))
+                # if "EPOCH: " in line:
+                #     ep_strt = line.find("EPOCH: ")+len("EPOCH: ")
+                #     epochs.append(int(line[ep_strt:]))
+                # if "BR Agent eval score:" in line:
+                #     line = line.split(",")
+                #     sc_strt = line[0].find("BR Agent eval score:")+len("BR Agent eval score: ")
+                #     scores.append(float(line[0][sc_strt:]))
             plt.plot(epochs, scores)
 
         legends = []
         for filename in self.filenames:
-            legends.append(filename.split("/")[-2].split("_")[-1])
+            legends.append(filename.split("/")[-2])
 
         #plot name using the exps path and legends
         self.plot_name = os.path.join(self.exps_path, "_".join(legends))
@@ -168,10 +188,9 @@ if __name__ == "__main__":
     # print(filenames)
     # for filename in filenames:
     #     PlotRewardDistribution(args, filename, None)
-    # PlotRewardDistribution(args, "/data/kmirakho/vdn-offline-data/data_rewards/rewards_expert_replay_20k.npy", None)
+    # PlotRewardDistribution(args, "/data/kmirakho/vdn-offline-data-seed-777/data_rewards/rewards_data_80.npy", None)
  
     # multiple_filenames = ["/data/kmirakho/vdn-offline-data/data_rewards/rewards_data_20.npy", "/data/kmirakho/vdn-offline-data/data_rewards/rewards_data_40.npy", "/data/kmirakho/vdn-offline-data/data_rewards/rewards_data_80.npy"]
     # # multiple_filenames = ["/data/kmirakho/vdn-offline-data/data_rewards/rewards_data_640.npy", "/data/kmirakho/vdn-offline-data/data_rewards/rewards_data_1280.npy"]
     # PlotRewardDistribution(args, None, multiple_filenames)
-
     PlotTrainingLogs(args)

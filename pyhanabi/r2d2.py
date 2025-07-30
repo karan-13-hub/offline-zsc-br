@@ -79,6 +79,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             p.requires_grad = False
 
         self.vdn = vdn
+        # print("\n\nvdn", vdn, "\n\n")
         self.multi_step = multi_step
         self.gamma = gamma
         self.eta = eta
@@ -133,7 +134,6 @@ class R2D2Agent(torch.jit.ScriptModule):
         legal_move: torch.Tensor,
         hid: Dict[str, torch.Tensor],
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
         legal_adv = (1 + adv - adv.min()) * legal_move
         greedy_action = legal_adv.argmax(1).detach()
@@ -190,7 +190,6 @@ class R2D2Agent(torch.jit.ScriptModule):
             )
             reply = {"prob": prob}
         else:
-            # print(priv_s.device, publ_s.device, legal_move.device)
             greedy_action, new_hid = self.greedy_act(priv_s, publ_s, legal_move, hid)
             reply = {}
 
@@ -247,41 +246,41 @@ class R2D2Agent(torch.jit.ScriptModule):
         target = reward + (1 - terminal) * self.gamma * qa
         return {"target": target.detach()}
 
-    # @torch.jit.script_method
-    # def compute_priority(
-    #     self, input_: Dict[str, torch.Tensor]
-    # ) -> Dict[str, torch.Tensor]:
-    #     if self.uniform_priority:
-    #         return {"priority": torch.ones_like(input_["reward"].sum(1))}
+    @torch.jit.script_method
+    def compute_priority(
+        self, input_: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        if self.uniform_priority:
+            return {"priority": torch.ones_like(input_["reward"].sum(1))}
 
-    #     # swap batch_dim and seq_dim
-    #     for k, v in input_.items():
-    #         if k != "seq_len":
-    #             input_[k] = v.transpose(0, 1).contiguous()
+        # swap batch_dim and seq_dim
+        for k, v in input_.items():
+            if k != "seq_len":
+                input_[k] = v.transpose(0, 1).contiguous()
 
-    #     obs = {
-    #         "priv_s": input_["priv_s"],
-    #         "publ_s": input_["publ_s"],
-    #         "legal_move": input_["legal_move"],
-    #     }
-    #     if self.boltzmann:
-    #         obs["temperature"] = input_["temperature"]
+        obs = {
+            "priv_s": input_["priv_s"],
+            "publ_s": input_["publ_s"],
+            "legal_move": input_["legal_move"],
+        }
+        if self.boltzmann:
+            obs["temperature"] = input_["temperature"]
 
-    #     if self.off_belief:
-    #         obs["target"] = input_["target"]
+        if self.off_belief:
+            obs["target"] = input_["target"]
 
-    #     hid = {"h0": input_["h0"], "c0": input_["c0"]}
-    #     action = {"a": input_["a"]}
-    #     reward = input_["reward"]
-    #     terminal = input_["terminal"]
-    #     bootstrap = input_["bootstrap"]
-    #     seq_len = input_["seq_len"]
-    #     err, _, _ = self.td_error(
-    #         obs, hid, action, reward, terminal, bootstrap, seq_len, bc, bc_weight
-    #     )
-    #     priority = err.abs()
-    #     priority = self.aggregate_priority(priority, seq_len).detach().cpu()
-    #     return {"priority": priority}
+        hid = {"h0": input_["h0"], "c0": input_["c0"]}
+        action = {"a": input_["a"]}
+        reward = input_["reward"]
+        terminal = input_["terminal"]
+        bootstrap = input_["bootstrap"]
+        seq_len = input_["seq_len"]
+        err, _, _ = self.td_error(
+            obs, hid, action, reward, terminal, bootstrap, seq_len
+        )
+        priority = err.abs()
+        priority = self.aggregate_priority(priority, seq_len).detach().cpu()
+        return {"priority": priority}
 
     @torch.jit.script_method
     def td_error(
@@ -293,9 +292,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         terminal: torch.Tensor,
         bootstrap: torch.Tensor,
         seq_len: torch.Tensor,
-        bc: bool,
-        bc_weight: float,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         max_seq_len = obs["priv_s"].size(0)
         priv_s = obs["priv_s"]
         publ_s = obs["publ_s"]
@@ -339,8 +336,7 @@ class R2D2Agent(torch.jit.ScriptModule):
                 assert target_q.size() == pa.size()
                 target_qa = (pa * target_q).sum(-1).detach()
                 assert online_qa.size() == target_qa.size()
-            
-                
+
             if self.vdn:
                 online_qa = online_qa.view(max_seq_len, bsize, num_player).sum(-1)
                 target_qa = target_qa.view(max_seq_len, bsize, num_player).sum(-1)
@@ -358,20 +354,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         err = (target.detach() - online_qa) * mask
         if self.off_belief and "valid_fict" in obs:
             err = err * obs["valid_fict"]
-
-        if bc:
-            legal_q = (1 + online_q - online_q.min()) * legal_move
-            legal_logit = nn.functional.softmax(legal_q, -1)
-            gt_logit = torch.zeros_like(legal_logit, dtype=torch.float32)
-            gt_logit.scatter_(2, action.unsqueeze(-1), 1)
-            gt_logit = gt_logit.view(-1, online_q.shape[-1])
-            legal_logit = legal_logit.view(-1, online_q.shape[-1])
-            bc_loss = torch.nn.functional.cross_entropy(legal_logit, gt_logit, reduction="none")
-            if self.vdn:
-                bc_loss = bc_loss.view(max_seq_len, bsize, num_player).sum(-1)
-        else :
-            bc_loss = torch.zeros(1, device=err.device)
-        return err, bc_loss, lstm_o, online_q
+        return err, lstm_o, online_q
 
     def aux_task_iql(self, lstm_o, hand, seq_len, rl_loss_size, stat):
         seq_size, bsize, _ = hand.size()
@@ -403,8 +386,8 @@ class R2D2Agent(torch.jit.ScriptModule):
         agg_priority = self.eta * p_max + (1.0 - self.eta) * p_mean
         return agg_priority
 
-    def loss(self, batch, aux_weight, stat, bc, bc_weight):
-        err, bc_loss, lstm_o, online_q = self.td_error(
+    def loss(self, batch, aux_weight, stat):
+        err, lstm_o, online_q = self.td_error(
             batch.obs,
             batch.h0,
             batch.action,
@@ -412,8 +395,6 @@ class R2D2Agent(torch.jit.ScriptModule):
             batch.terminal,
             batch.bootstrap,
             batch.seq_len,
-            bc,
-            bc_weight,
         )
         rl_loss = nn.functional.smooth_l1_loss(
             err, torch.zeros_like(err), reduction="none"
@@ -421,15 +402,11 @@ class R2D2Agent(torch.jit.ScriptModule):
         rl_loss = rl_loss.sum(0)
         stat["rl_loss"].feed((rl_loss / batch.seq_len).mean().item())
 
-        bc_loss = bc_loss.sum(0)
-        stat["bc_loss"].feed((bc_loss / batch.seq_len).mean().item())
-
         priority = err.abs()
         priority = self.aggregate_priority(priority, batch.seq_len).detach().cpu()
 
-        loss = rl_loss + bc_weight * bc_loss
-
-        if aux_weight <= 0: 
+        loss = rl_loss
+        if aux_weight <= 0:
             return loss, priority, online_q
 
         if self.vdn:

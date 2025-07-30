@@ -468,16 +468,18 @@ if __name__ == "__main__":
                 agent_weights = (agent_weights == i).astype(float)
                 agent_weights = torch.from_numpy(agent_weights).to(args.train_device)
                 agent_loss_weights.append(agent_weights)
-                loss, bc_loss, priority, _, _ = agents[i].loss(batch, args.aux_weight, stat, args.bc)
+                loss, bc_loss, cql_loss, priority, _, _ = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
 
                 # Weight losses by distance-based weights
                 weighted_loss_sp = args.sp_weight * loss * agent_weights
                 weighted_loss_bc = args.bc_weight * bc_loss * agent_weights
-                agent_losses.append((weighted_loss_sp, weighted_loss_bc))
+                weighted_loss_cql = args.cql_weight * cql_loss * agent_weights
+                agent_losses.append((weighted_loss_sp, weighted_loss_bc, weighted_loss_cql))
                 
             # Aggregate all agent losses with their weights
             loss_sp = sum([loss_tuple[0] for loss_tuple in agent_losses])
             loss_bc = sum([loss_tuple[1] for loss_tuple in agent_losses])
+            loss_cql = sum([loss_tuple[2] for loss_tuple in agent_losses])
 
             # Apply the agent's loss calculation
             loss_cp, online_q_values, valid_masks = train_br_agent(agent_br, agents, agent_loss_weights, batch, args)
@@ -495,7 +497,7 @@ if __name__ == "__main__":
                 # Sum the diversity losses from all agents
                 loss_div = args.div_weight * sum(agent_div_losses)
                 
-            loss = loss_cp + loss_sp + loss_bc - loss_div
+            loss = loss_cp + loss_sp + loss_bc + loss_cql - loss_div
             
             # Weight by importance sampling weights and take mean
             loss = (loss * weight).mean()
@@ -505,6 +507,7 @@ if __name__ == "__main__":
             stat["Self-play loss"].feed(loss_sp.mean().detach().item())
             stat["Cross-play loss"].feed(loss_cp.mean().detach().item())
             stat["Behavior Cloning loss"].feed(loss_bc.mean().detach().item())
+            stat["CQL loss"].feed(loss_cql.mean().detach().item())
             stat["Diversity loss"].feed(loss_div.mean().detach().item())
             stat["loss"].feed(loss.detach().item())
 
@@ -519,7 +522,6 @@ if __name__ == "__main__":
 
             torch.cuda.synchronize()
             stopwatch.time("update model")
-
 
             stat["grad_norm"].feed(g_norm)
 

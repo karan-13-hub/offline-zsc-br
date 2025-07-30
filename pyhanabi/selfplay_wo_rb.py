@@ -122,6 +122,10 @@ def parse_args():
     parser.add_argument("--bc", type=bool, default=False)
     parser.add_argument("--bc_weight", type=float, default=0.0)
 
+    #CQL
+    parser.add_argument("--cql", type=bool, default=False)
+    parser.add_argument("--cql_weight", type=float, default=0.0)
+
 
     args = parser.parse_args()
     if args.off_belief == 1:
@@ -339,7 +343,7 @@ if __name__ == "__main__":
             # print("sample time: ", time.time() - start)
 
             start = time.time()
-            loss, priority, online_q = agent.loss(batch, args.aux_weight, stat, args.bc, args.bc_weight)
+            loss, priority, online_q = agent.loss(batch, args.aux_weight, stat, args.bc, args.bc_weight, args.cql, args.cql_weight)
             # print("loss time: ", time.time() - start)
 
             if clone_bot is not None and args.clone_weight > 0:

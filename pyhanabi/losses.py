@@ -266,8 +266,15 @@ def td_error_br(
             bc_loss = bc_loss.view(max_seq_len, bsize, num_player).sum(-1)
     else :
         bc_loss = torch.zeros(1, device=err_1_2.device)
+    
+    if args.cql:
+        online_q_1_2 = online_q_1_2.view(max_seq_len, bsize, num_player, -1)
+        logsumexp = torch.logsumexp(online_q_1_2, dim=2)
+        cql_loss = (logsumexp - online_qa_1_2)
+    else:
+        cql_loss = torch.zeros(1, device=err_1_2.device)
     # Return both sets of values and the errors
-    return err_1_2, ag1_online_q_diversity, bc_loss, mask
+    return err_1_2, ag1_online_q_diversity, bc_loss, cql_loss, mask
 
 def cp_loss(agents_1, agents_2, batch, stat, args):
     err_1_2, err_2_1, ag1_online_q_diversity, ag2_online_q_diversity, valid_mask = td_error(
@@ -346,7 +353,7 @@ def q_ensemble_loss(agent_br, agents, agent_weights, batch, args):
                 priv_s, publ_s, legal_move, action, new_hid
             )
             new_hid = get_new_hid(h0)
-            agent_target_qa, _, _, _ = agent.target_net(
+            agent_target_qa, _, agent_target_q, _ = agent.target_net(
                 priv_s, publ_s, legal_move, agent_greedy_a, new_hid)
             
             agent_target_qa = agent_target_qa.view(max_seq_len, bsize, num_player).sum(-1)
@@ -379,7 +386,7 @@ def train_br_agent(agent_br, agents, agent_weights, batch, args):
     online_q_values = []
     valid_masks = []
     for i, agent in enumerate(agents):
-        err, online_q_diversity, bc_loss, valid_mask = td_error_br(
+        err, online_q_diversity, bc_loss, cql_loss, valid_mask = td_error_br(
             agent,
             agent_br,
             batch.obs,
@@ -396,11 +403,11 @@ def train_br_agent(agent_br, agents, agent_weights, batch, args):
         )
         rl_loss = rl_loss.sum(0)
         bc_loss = bc_loss.sum(0)
-
+        cql_loss = cql_loss.sum(0)   
         cp_loss = cp_loss + agent_weights[i] * rl_loss
         online_q_values.append(online_q_diversity)
         valid_masks.append(valid_mask)
-    cp_loss = cp_loss + args.cp_bc_weight * bc_loss
+    cp_loss = cp_loss + args.cp_bc_weight * bc_loss + args.cp_cql_weight * cql_loss
     return cp_loss, online_q_values, valid_masks
 
 

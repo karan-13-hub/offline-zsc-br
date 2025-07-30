@@ -6,9 +6,9 @@
 #
 #!/bin/bash
 python selfplay_mi_sim_br.py \
-       --save_dir exps/br_medium_data_seed_42_1e9+7/vdn_cp_bc_0.4\
-       --models_dir ../models/mi_cluster_medium/vdn_seed42_bc_0.4 \
-       --clu_mod_dir exps/br_medium_data_seed_42_1e9+7/ \
+       --save_dir exps/br_medium_data_seed_777_1234_31337/vdn_cp_bc_0.4\
+       --models_dir ../models/mi_cluster_medium/vdn_seed777_bc_0.4 \
+       --clu_mod_dir exps/br_medium_data_seed_777_1234_31337/ \
        --num_thread 40 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -21,7 +21,7 @@ python selfplay_mi_sim_br.py \
        --eps 1.5e-05 \
        --grad_clip 5 \
        --gamma 0.999 \
-       --seed 9 \
+       --seed 777 \
        --batchsize 128 \
        --burn_in_frames 10000 \
        --replay_buffer_size 131072 \
@@ -50,10 +50,12 @@ python selfplay_mi_sim_br.py \
        --cp_bc_weight 0.4\
        --cp_bc_decay_factor 0\
        --cp_bc_decay_start 0\
+       --cql True\
+       --cp_cql_weight 0.4\
        --sp_weight 1.0\
-       --act_device cuda:6,cuda:7 \
-       --train_device cuda:6 \
-       --dataset_path /data/kmirakho/vdn-offline-data/data_80\
+       --act_device cuda:3,cuda:4 \
+       --train_device cuda:3 \
+       --dataset_path /data/kmirakho/vdn-offline-data-seed-777/data_80\
        --wgt_thr 0.25\
        --include 150\
        --exclude 100\

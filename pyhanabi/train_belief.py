@@ -18,6 +18,7 @@ import pickle
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from act_group import ActGroup
 from create import create_envs, create_threads
@@ -51,6 +52,7 @@ def parse_args():
     parser.add_argument("--batchsize", type=int, default=128)
     parser.add_argument("--num_epoch", type=int, default=1000)
     parser.add_argument("--epoch_len", type=int, default=1000)
+    parser.add_argument("--save_model_after", type=int, default=100)
 
     # replay buffer settings
     parser.add_argument("--burn_in_frames", type=int, default=80000)
@@ -287,7 +289,7 @@ if __name__ == "__main__":
         tachometer.start()
         stat.reset()
 
-        for batch_idx in range(args.epoch_len):
+        for batch_idx in tqdm(range(args.epoch_len)):
             batch, weight = replay_buffer.sample(args.batchsize, args.train_device)
             assert weight.max() == 1
             loss, xent, xent_v0, _ = model.loss(batch)
@@ -313,7 +315,7 @@ if __name__ == "__main__":
         tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, count_factor)
 
         force_save_name = None
-        if epoch > 0 and epoch % 100 == 0:
+        if epoch > 0 and epoch % args.save_model_after == 0:
             force_save_name = "model_epoch%d" % epoch
         saver.save(
             None,

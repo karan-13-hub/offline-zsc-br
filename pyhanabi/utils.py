@@ -363,8 +363,8 @@ def update_intermediate_coop_agents(coop_ckpts, act_group, overwrites={}, device
     act_group.update_coop_models(coop_agents)
 
 
-def load_coop_agents(coop_ckpts, overwrites={}, device="cpu", num_retries=10):
-    overwrites.update({"device": device})
+def load_coop_agents(coop_ckpts, overwrites={}, device="cpu", num_retries=10, vdn=False, multi_step=1):
+    overwrites.update({"device": device, "vdn": vdn, "multi_step": multi_step})
     coop_agents = []
     for coop_ckpt in coop_ckpts:
         coop_pth = coop_ckpt.get_last_version()
