@@ -24,4 +24,4 @@ models2/
 models/
 models_bkup.zip
 models_bkup/
-third_party/pybind11
+# third_party/pybind11
