@@ -279,7 +279,7 @@ class PublicLSTMNet(torch.jit.ScriptModule):
             self.priv_in_dim = in_dim[1]
             self.publ_in_dim = in_dim[2]
 
-        # self.device = device
+        self.device = device
         self.hid_dim = hid_dim
         self.out_dim = out_dim
         self.num_ff_layer = 1

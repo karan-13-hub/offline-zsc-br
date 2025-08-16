@@ -84,7 +84,7 @@ def parse_args():
     parser.add_argument(
         "--net", type=str, default="publ-lstm", help="publ-lstm/ffwd/lstm"
     )
-
+    parser.add_argument("--coeff_selfplay", type=float, default=0.0)
     parser.add_argument("--train_device", type=str, default="cuda:0")
     parser.add_argument("--batchsize", type=int, default=128)
     parser.add_argument("--num_epoch", type=int, default=5000)
@@ -279,32 +279,8 @@ if __name__ == "__main__":
         False,  # uniform priority
         args.off_belief,
         )
-    # import pdb; pdb.set_trace()
-
+    
     agent_br.sync_target_with_online()
-    # optim_br = torch.optim.Adam(agent_br.online_net.parameters(), lr=args.lr, eps=args.eps)
-
-    # coop_agents = []
-    # for i in range(args.num_agents):
-    #     coop_agents.append(
-    #         r2d2.R2D2Agent(
-    #             (args.method == "vdn"),
-    #             args.multi_step,
-    #             args.gamma,
-    #             args.eta,
-    #             args.train_device,
-    #             games[0].feature_size(args.sad),
-    #             args.rnn_hid_dim,
-    #             games[0].num_action(),
-    #             args.net,
-    #             args.num_lstm_layer,
-    #             args.boltzmann_act,
-    #             False,  # uniform priority
-    #             args.off_belief,
-    #         )
-    #     )
-    #     coop_agents[i].sync_target_with_online()
-    #     coop_agents[i] = coop_agents[i].to(args.train_device)
     
     if args.load_br_model and args.load_br_model != "None":
         print("*****loading pretrained model*****")
@@ -387,7 +363,8 @@ if __name__ == "__main__":
         "max_len": args.max_len,
         "gamma": args.gamma,
         "belief_model": belief_model,
-        "off_belief": args.off_belief
+        "off_belief": args.off_belief,
+        "coeff_selfplay": args.coeff_selfplay
     }
     # act_group_cls = ActGroup
 

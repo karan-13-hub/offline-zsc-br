@@ -15,17 +15,17 @@ python selfplay.py \
        --eps 1.5e-05 \
        --gamma 0.999 \
        --seed 2254257 \
-       --burn_in_frames 1000 \
+       --burn_in_frames 10000 \
        --replay_buffer_size 100000 \
        --batchsize 128 \
-       --epoch_len 10 \
+       --epoch_len 1000 \
        --num_epoch 2000 \
        --num_player 2 \
        --net lstm \
        --num_lstm_layer 2 \
        --multi_step 3 \
-       --train_device cuda:1 \
-       --act_device cuda:2 \
+       --train_device cuda:0 \
+       --act_device cuda:2,cuda:1 \
        --belief_device cuda:3 \
 
        # --save_dir exps/iql_trial \

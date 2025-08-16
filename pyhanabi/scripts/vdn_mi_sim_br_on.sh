@@ -5,13 +5,12 @@
 # LICENSE file in the root directory of this source tree.
 #
 #!/bin/bash
-python selfplay_mi_sim_br_on.py \
-       --save_dir exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_wo_belief\
-       --clu_mod_dir exps/br_medium_data_seed_777_31337_1e9+7/\
-       --load_br_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4/model_seed_9_agent_br_epoch_150.pthw\
-       --load_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4/model_seed_9_agent_0_epoch_150.pthw exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4/model_seed_9_agent_1_epoch_150.pthw exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4/model_seed_9_agent_2_epoch_150.pthw\
-       --num_thread 20 \
-       --num_game_per_thread 40 \
+python selfplay_mi_sim_br_on_with_finetune.py \
+       --save_dir exps/br_medium_data_seed_9_42_1234/vdn_on_cp_wo_belief_try\
+       --load_br_model exps/br_medium_data_seed_9_42_1234/vdn_on_cp_wo_belief_try/BR_agent_9_epoch_100.pthw\
+       --load_model exps/br_medium_data_seed_9_42_1234/vdn_on_cp_wo_belief_try/coop_agent_1_9_epoch_100.pthw exps/br_medium_data_seed_9_42_1234/vdn_on_cp_wo_belief_try/coop_agent_2_9_epoch_100.pthw exps/br_medium_data_seed_9_42_1234/vdn_on_cp_wo_belief_try/coop_agent_3_9_epoch_100.pthw\
+       --num_thread 80 \
+       --num_game_per_thread 80 \
        --num_data_thread 4 \
        --num_update_between_sync 2500\
        --method iql \
@@ -27,7 +26,7 @@ python selfplay_mi_sim_br_on.py \
        --burn_in_frames 10000 \
        --replay_buffer_size 131072 \
        --epoch_len 1000 \
-       --num_epoch 500 \
+       --num_epoch 1501 \
        --num_lstm_layer 2 \
        --priority_exponent 0.9 \
        --priority_weight 0.6 \
@@ -36,7 +35,7 @@ python selfplay_mi_sim_br_on.py \
        --eval_bomb 0 \
        --load_after 5 \
        --num_eval_after 1 \
-       --save_model_after 25 \
+       --save_model_after 100 \
        --num_player 2 \
        --rnn_hid_dim 512 \
        --num_agents 3\

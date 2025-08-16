@@ -176,6 +176,7 @@ class BRActGroup:
         gamma,
         off_belief,
         belief_model,
+        coeff_selfplay
     ):
         # import pdb; pdb.set_trace()
         assert method in ["iql"]
@@ -213,6 +214,9 @@ class BRActGroup:
                 )
         
         assert len(self.belief_runner) == len(self.coop_model_runners)
+        self.num_threads_selfplay = int(num_thread * coeff_selfplay)
+        
+        # import pdb; pdb.set_trace()
         #actor
         self.actors = []
         for i in range(num_thread):
@@ -221,19 +225,23 @@ class BRActGroup:
                 game_actors = []
                 for k in range(num_player):
                     cur_explore_eps = explore_eps
-                    if k == 0:
+                    if i >= self.num_threads_selfplay:
+                        if k == 0:
+                            cur_model = self.model_runners[i % self.num_runners]
+                            player_buffer = replay_buffer
+                        else:
+                            if self.coop_model_runners:
+                                cur_model = self.coop_model_runners[
+                                    j % self.num_coop_runners
+                                ]
+                                cur_explore_eps = [0.0]
+                            else:
+                                cur_model = self.model_runners[i % self.num_runners]
+                                cur_explore_eps = [1.0]
+                            player_buffer = None
+                    else:
                         cur_model = self.model_runners[i % self.num_runners]
                         player_buffer = replay_buffer
-                    else:
-                        if self.coop_model_runners:
-                            cur_model = self.coop_model_runners[
-                                j % self.num_coop_runners
-                            ]
-                            cur_explore_eps = [0.0]
-                        else:
-                            cur_model = self.model_runners[i % self.num_runners]
-                            cur_explore_eps = [1.0]
-                        player_buffer = None
                     actor = hanalearn.R2D2Actor(
                         cur_model,
                         seed,
@@ -251,16 +259,28 @@ class BRActGroup:
                         max_len,
                         gamma,
                     )
-                    if k==0 and self.off_belief:
-                        if self.belief_runner is None:
-                            actor.set_belief_runner(None)
-                            print("belief runner is None")
-                        else:
-                            actor.set_belief_runner(
-                                self.belief_runner[j % len(self.belief_runner)]
-                            )
-                    else:
-                        actor.set_belief_runner(None)
+                    # if i >= self.num_threads_selfplay:
+                    #     if k==0 and self.off_belief:
+                    #         if self.belief_runner is None:
+                    #             actor.set_belief_runner(None)
+                    #             print("belief runner is None")
+                    #         else:
+                    #             actor.set_belief_runner(
+                    #                 self.belief_runner[j % len(self.belief_runner)]
+                    #             )
+                    #     else:
+                    #         actor.set_belief_runner(None)
+                    # else:
+                    #     actor.set_belief_runner(None)
+                    if i >= self.num_threads_selfplay:
+                        if self.off_belief:
+                            if self.belief_runner is None:
+                                actor.set_belief_runner(None)
+                                print("belief runner is None")
+                            else:
+                                actor.set_belief_runner(
+                                    self.belief_runner[j % len(self.belief_runner)]
+                                )
                     seed += 1
                     game_actors.append(actor)
                 for k in range(num_player):

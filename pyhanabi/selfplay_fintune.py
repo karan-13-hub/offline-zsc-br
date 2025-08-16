@@ -26,6 +26,10 @@ import common_utils
 import rela
 import r2d2
 import utils
+from process_data import save_replay_buffer
+from replay_load import PrioritizedReplayBuffer
+from tqdm import tqdm
+import gc
 
 
 def parse_args():
@@ -74,6 +78,7 @@ def parse_args():
     parser.add_argument("--num_epoch", type=int, default=5000)
     parser.add_argument("--epoch_len", type=int, default=1000)
     parser.add_argument("--num_update_between_sync", type=int, default=2500)
+    parser.add_argument("--save_model_after", type=int, default=25)
 
     # DQN settings
     parser.add_argument("--multi_step", type=int, default=3)
@@ -81,24 +86,35 @@ def parse_args():
     # replay buffer settings
     parser.add_argument("--burn_in_frames", type=int, default=10000)
     parser.add_argument("--replay_buffer_size", type=int, default=100000)
+
     parser.add_argument(
         "--priority_exponent", type=float, default=0.9, help="alpha in p-replay"
     )
+
     parser.add_argument(
         "--priority_weight", type=float, default=0.6, help="beta in p-replay"
     )
+
+    parser.add_argument(
+        "--visit_weight", type=float, default=0.5, help="visit weight"
+    )
+
     parser.add_argument("--max_len", type=int, default=80, help="max seq len")
     parser.add_argument("--prefetch", type=int, default=3, help="#prefetch batch")
 
     # thread setting
     parser.add_argument("--num_thread", type=int, default=10, help="#thread_loop")
     parser.add_argument("--num_game_per_thread", type=int, default=40)
+    parser.add_argument("--num_data_thread", type=int, default=4)
 
     # actor setting
     parser.add_argument("--act_base_eps", type=float, default=0.1)
     parser.add_argument("--act_eps_alpha", type=float, default=7)
     parser.add_argument("--act_device", type=str, default="cuda:1")
+    parser.add_argument("--num_eval_after", type=int, default=1)
     parser.add_argument("--actor_sync_freq", type=int, default=10)
+    parser.add_argument("--dataset_path", type=str, default="/data/kmirakho/offline-model/dataset_rl_1040640_sml.npz")
+
 
     args = parser.parse_args()
     if args.off_belief == 1:
@@ -132,6 +148,7 @@ if __name__ == "__main__":
     explore_eps = utils.generate_explore_eps(
         args.act_base_eps, args.act_eps_alpha, args.num_t
     )
+    
     expected_eps = np.mean(explore_eps)
     print("explore eps:", explore_eps)
     print("avg explore eps:", np.mean(explore_eps))
@@ -171,11 +188,10 @@ if __name__ == "__main__":
         args.off_belief,
     )
     agent.sync_target_with_online()
-
     if args.load_model and args.load_model != "None":
         if args.off_belief and args.belief_model != "None":
             belief_config = utils.get_train_config(args.belief_model)
-            # args.load_model = belief_config["policy"]
+            args.load_model = belief_config["policy"]
 
         print("*****loading pretrained model*****")
         print(args.load_model)
@@ -192,6 +208,22 @@ if __name__ == "__main__":
     optim = torch.optim.Adam(agent.online_net.parameters(), lr=args.lr, eps=args.eps)
     print(agent)
     eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+    if args.load_model and args.load_model != "None":
+        eval_seed = (9917 + 0 * 999999) % 7777777
+        eval_agent.load_state_dict(agent.state_dict())
+        score, perfect, *_ = evaluate(
+            [eval_agent for _ in range(args.num_player)],
+            1000,
+            eval_seed,
+            args.eval_bomb,
+            0,  # explore eps
+            args.sad,
+            args.hide_action,
+            device=args.train_device,
+        )
+        print("\n\n================")
+        print(f"Initial eval score for pretrained model: {score}, perfect: {perfect}")
+        print("================\n\n")
 
     replay_buffer = rela.RNNPrioritizedReplay(
         args.replay_buffer_size,
@@ -251,6 +283,7 @@ if __name__ == "__main__":
 
     act_group.start()
     context.start()
+
     while replay_buffer.size() < args.burn_in_frames:
         print("warming up replay buffer:", replay_buffer.size())
         time.sleep(1)
@@ -265,7 +298,7 @@ if __name__ == "__main__":
     stat = common_utils.MultiCounter(args.save_dir)
     tachometer = utils.Tachometer()
     stopwatch = common_utils.Stopwatch()
-
+    
     for epoch in range(args.num_epoch):
         print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
@@ -273,20 +306,22 @@ if __name__ == "__main__":
         stat.reset()
         stopwatch.reset()
 
-        for batch_idx in range(args.epoch_len):
+        for batch_idx in tqdm(range(args.epoch_len),desc=f'Training', bar_format='{l_bar}{bar:20}{r_bar}', leave=True):
             num_update = batch_idx + epoch * args.epoch_len
             if num_update % args.num_update_between_sync == 0:
+                print("\nUpdated the target with online\n")
                 agent.sync_target_with_online()
             if num_update % args.actor_sync_freq == 0:
                 act_group.update_model(agent)
 
             torch.cuda.synchronize()
             stopwatch.time("sync and updating")
-
+            
             batch, weight = replay_buffer.sample(args.batchsize, args.train_device)
             stopwatch.time("sample data")
 
             loss, priority, online_q = agent.loss(batch, args.aux_weight, stat)
+
             if clone_bot is not None and args.clone_weight > 0:
                 bc_loss = agent.behavior_clone_loss(
                     online_q, batch, args.clone_t, clone_bot, stat
@@ -307,7 +342,7 @@ if __name__ == "__main__":
             torch.cuda.synchronize()
             stopwatch.time("update model")
 
-            replay_buffer.update_priority(priority)
+            replay_buffer.update_priority(priority)   
             stopwatch.time("updating priority")
 
             stat["loss"].feed(loss.detach().item())
@@ -320,22 +355,27 @@ if __name__ == "__main__":
         stopwatch.summary()
         stat.summary(epoch)
 
-        eval_seed = (9917 + epoch * 999999) % 7777777
-        eval_agent.load_state_dict(agent.state_dict())
-        score, perfect, *_ = evaluate(
-            [eval_agent for _ in range(args.num_player)],
-            1000,
-            eval_seed,
-            args.eval_bomb,
-            0,  # explore eps
-            args.sad,
-            args.hide_action,
-            device=args.train_device,
-        )
-
+        if epoch % args.num_eval_after == 0:
+            eval_seed = (9917 + epoch * 999999) % 7777777
+            eval_agent.load_state_dict(agent.state_dict())
+            score, perfect, *_ = evaluate(
+                [eval_agent for _ in range(args.num_player)],
+                1000,
+                eval_seed,
+                args.eval_bomb,
+                0,  # explore eps
+                args.sad,
+                args.hide_action,
+                device=args.train_device,
+            )
+        else :
+            score = 0
+            perfect = 0
+        
         force_save_name = None
-        if epoch > 0 and epoch % 100 == 0:
-            force_save_name = "model_epoch%d" % epoch
+        if epoch > 0 and epoch % args.save_model_after == 0:
+            #save the model with the name of the load model
+            force_save_name = args.load_model.split("/")[-1].split(".")[0]
         model_saved = saver.save(
             None, agent.online_net.state_dict(), score, force_save_name=force_save_name
         )

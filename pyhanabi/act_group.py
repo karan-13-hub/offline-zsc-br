@@ -252,8 +252,10 @@ class BRActGroup:
             runner.update_model(agent)
 
     def update_coop_models(self, coop_agents):
+        num_agents = len(coop_agents) #KARAN
         for i, runner in enumerate(self.coop_model_runners):
-            runner.update_model(coop_agents[i % self.num_coop_runners])
+            # runner.update_model(coop_agents[i % self.num_coop_runners]) #KARAN
+            runner.update_model(coop_agents[i % num_agents]) #KARAN
 
 
 def make_model_runners(agents, devices, runners, methods):

@@ -356,6 +356,81 @@ class R2D2Agent(torch.jit.ScriptModule):
             err = err * obs["valid_fict"]
         return err, lstm_o, online_q
 
+    @torch.jit.script_method
+    def sp_td_error(
+        self,
+        obs: Dict[str, torch.Tensor],
+        hid: Dict[str, torch.Tensor],
+        action: Dict[str, torch.Tensor],
+        reward: torch.Tensor,
+        terminal: torch.Tensor,
+        bootstrap: torch.Tensor,
+        seq_len: torch.Tensor,
+        off_belief: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        max_seq_len = obs["priv_s"].size(0)
+        priv_s = obs["priv_s"]
+        publ_s = obs["publ_s"]
+        legal_move = obs["legal_move"]
+        action = action["a"]
+
+        for k, v in hid.items():
+            hid[k] = v.flatten(1, 2).contiguous()
+
+        bsize, num_player = priv_s.size(1), 1
+        if self.vdn:
+            num_player = priv_s.size(2)
+            priv_s = priv_s.flatten(1, 2)
+            publ_s = publ_s.flatten(1, 2)
+            legal_move = legal_move.flatten(1, 2)
+            action = action.flatten(1, 2)
+
+        # this only works because the trajectories are padded,
+        # i.e. no terminal in the middle
+        online_qa, greedy_a, online_q, lstm_o = self.online_net(
+            priv_s, publ_s, legal_move, action, hid
+        )
+
+        if off_belief:
+            target = obs["target"]
+        else:
+            target_qa, _, target_q, _ = self.target_net(
+                priv_s, publ_s, legal_move, greedy_a, hid
+            )
+
+            if self.boltzmann:
+                temperature = obs["temperature"].flatten(1, 2).unsqueeze(2)
+                # online_q: [seq_len, bathc * num_player, num_action]
+                logit = online_q / temperature.clamp(min=1e-6)
+                # logit: [seq_len, batch * num_player, num_action]
+                legal_logit = logit - (1 - legal_move) * 1e30
+                assert legal_logit.dim() == 3
+                pa = nn.functional.softmax(legal_logit, 2).detach()
+                # pa: [seq_len, batch * num_player, num_action]
+
+                assert target_q.size() == pa.size()
+                target_qa = (pa * target_q).sum(-1).detach()
+                assert online_qa.size() == target_qa.size()
+
+            if self.vdn:
+                online_qa = online_qa.view(max_seq_len, bsize, num_player).sum(-1)
+                target_qa = target_qa.view(max_seq_len, bsize, num_player).sum(-1)
+                lstm_o = lstm_o.view(max_seq_len, bsize, num_player, -1)
+
+            target_qa = torch.cat(
+                [target_qa[self.multi_step :], target_qa[: self.multi_step]], 0
+            )
+            target_qa[-self.multi_step :] = 0
+            assert target_qa.size() == reward.size()
+            target = reward + bootstrap * (self.gamma ** self.multi_step) * target_qa
+
+        mask = torch.arange(0, max_seq_len, device=seq_len.device)
+        mask = (mask.unsqueeze(1) < seq_len.unsqueeze(0)).float()
+        err = (target.detach() - online_qa) * mask
+        if off_belief and "valid_fict" in obs:
+            err = err * obs["valid_fict"]
+        return err, lstm_o, online_q
+
     def aux_task_iql(self, lstm_o, hand, seq_len, rl_loss_size, stat):
         seq_size, bsize, _ = hand.size()
         own_hand = hand.view(seq_size, bsize, 5, 3)
@@ -401,6 +476,52 @@ class R2D2Agent(torch.jit.ScriptModule):
         )
         rl_loss = rl_loss.sum(0)
         stat["rl_loss"].feed((rl_loss / batch.seq_len).mean().item())
+
+        priority = err.abs()
+        priority = self.aggregate_priority(priority, batch.seq_len).detach().cpu()
+
+        loss = rl_loss
+        if aux_weight <= 0:
+            return loss, priority, online_q
+
+        if self.vdn:
+            pred1 = self.aux_task_vdn(
+                lstm_o,
+                batch.obs["own_hand"],
+                batch.obs["temperature"],
+                batch.seq_len,
+                rl_loss.size(),
+                stat,
+            )
+            loss = rl_loss + aux_weight * pred1
+        else:
+            pred = self.aux_task_iql(
+                lstm_o,
+                batch.obs["own_hand"],
+                batch.seq_len,
+                rl_loss.size(),
+                stat,
+            )
+            loss = rl_loss + aux_weight * pred
+
+        return loss, priority, online_q
+
+    def sp_loss(self, batch, aux_weight, stat, off_belief):
+        err, lstm_o, online_q = self.sp_td_error(
+            batch.obs,
+            batch.h0,
+            batch.action,
+            batch.reward,
+            batch.terminal,
+            batch.bootstrap,
+            batch.seq_len,
+            off_belief,
+        )
+        rl_loss = nn.functional.smooth_l1_loss(
+            err, torch.zeros_like(err), reduction="none"
+        )
+        rl_loss = rl_loss.sum(0)
+        stat["sp_rl_loss"].feed((rl_loss / batch.seq_len).mean().item())
 
         priority = err.abs()
         priority = self.aggregate_priority(priority, batch.seq_len).detach().cpu()

@@ -116,6 +116,8 @@ class PlotTrainingLogs:
         self.exclude = args.exclude
         self.filenames = []
         self.training_logs = []
+        self.folder_names = ['OBL','OBL_off_to_on','vdn_on_cp_obl_finetune_with_sp_0.4', 'vdn_on_cp_finetune']
+        # , 'vdn_on_cp_obl_finetune_with_sp_0.6','vdn_on_cp_obl_finetune_with_sp_0.8']
         self.get_filenames()
         self.load_training_logs()
         self.plot_training_logs()
@@ -124,6 +126,8 @@ class PlotTrainingLogs:
     def get_filenames(self):
         output_folders = glob(self.exps_path + "/*")
         for folder in output_folders:
+            if folder.split("/")[-1] not in self.folder_names:
+                continue
             #check if folder is a directory
             if not os.path.isdir(folder):
                 continue
@@ -150,25 +154,40 @@ class PlotTrainingLogs:
         for log in self.training_logs:
             epochs = []
             scores = []
-            for line in log:
-                if "epoch" in line and "eval score:" in line:
-                    line = line.split(",")
-                    ep_strt = line[0].find("epoch ")+len("epoch ")
-                    sc_strt = line[1].find("score:")+len("score: ")
-                    epochs.append(int(line[0][ep_strt:]))
-                    scores.append(float(line[1][sc_strt:]))
-                # if "EPOCH: " in line:
-                #     ep_strt = line.find("EPOCH: ")+len("EPOCH: ")
-                #     epochs.append(int(line[ep_strt:]))
-                # if "BR Agent eval score:" in line:
-                #     line = line.split(",")
-                #     sc_strt = line[0].find("BR Agent eval score:")+len("BR Agent eval score: ")
-                #     scores.append(float(line[0][sc_strt:]))
+            if not "BR Agent" in log:
+                for line in log:
+                    if "epoch" in line and "eval score:" in line:
+                        line = line.split(",")
+                        ep_strt = line[0].find("epoch ")+len("epoch ")
+                        sc_strt = line[1].find("score:")+len("score: ")
+                        if int(line[0][ep_strt:]) > 210:
+                            break
+                        epochs.append(int(line[0][ep_strt:]))
+                        scores.append(float(line[1][sc_strt:]))
+            else:
+                for line in log:
+                    if "BR Agent eval score:" in line:
+                        line = line.split(",")
+                        sc_strt = line[0].find("BR Agent eval score:")+len("BR Agent eval score: ")
+                        scores.append(float(line[0][sc_strt:]))
+                    if "EPOCH: " in line:
+                        ep_strt = line.find("EPOCH: ")+len("EPOCH: ")
+                        epochs.append(int(line[ep_strt:]))
+            #smoothen the scores
+            scores = np.convolve(scores, np.ones(10)/10, mode='valid')
+            epochs = epochs[:len(scores)]
             plt.plot(epochs, scores)
 
         legends = []
         for filename in self.filenames:
-            legends.append(filename.split("/")[-2])
+            if "OBL_off_to_on" in filename:
+                legends.append("OBL off-to-on")
+            elif "vdn_on_cp_obl_finetune_with_sp_0.4" in filename:
+                legends.append("OURS (Counterfactual BR)")
+            elif "vdn_on_cp_finetune" in filename:
+                legends.append("BR off-to-on")
+            else:
+                legends.append("OBL")
 
         #plot name using the exps path and legends
         self.plot_name = os.path.join(self.exps_path, "_".join(legends))
