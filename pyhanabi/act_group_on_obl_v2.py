@@ -16,6 +16,7 @@ set_path.append_sys_path()
 import rela
 import hanalearn
 
+import copy
 assert rela.__file__.endswith(".so")
 assert hanalearn.__file__.endswith(".so")
 
@@ -178,7 +179,7 @@ class BRActGroup:
         belief_model,
         coeff_selfplay
     ):
-        # import pdb; pdb.set_trace()
+
         assert method in ["iql"]
         self.devices = devices.split(",")
 
@@ -204,16 +205,12 @@ class BRActGroup:
         #belief model
         self.off_belief = off_belief
         self.belief_model = belief_model
-        self.belief_runner = None
+        self.belief_runner = []
         if belief_model is not None:
-            self.belief_runner = []
-            for agentID, bm in enumerate(belief_model):
-                print(f"add belief {agentID} model to: {bm.device}")
-                self.belief_runner.append(
-                    rela.BatchRunner(bm, bm.device, 5000, ["sample"])
-                )
+            make_belief_model_runners(belief_model, self.devices, self.belief_runner)
         
-        assert len(self.belief_runner) == len(self.coop_model_runners)
+        if self.off_belief:
+            assert len(self.belief_runner) == len(self.coop_model_runners)
         self.num_threads_selfplay = int(num_thread * coeff_selfplay)
         
         # import pdb; pdb.set_trace()
@@ -314,6 +311,20 @@ class BRActGroup:
         num_agents = len(coop_agents)
         for i, runner in enumerate(self.coop_model_runners):
             runner.update_model(coop_agents[i % num_agents])
+    
+    def update_belief_models(self, belief_models): #KARAN
+        num_belief_models = len(belief_models)
+        for i, runner in enumerate(self.belief_runner):
+            runner.update_model(belief_models[i % num_belief_models])
+
+def make_belief_model_runners(belief_models, devices, runners):
+    for dev in devices:
+        for agentID, bm in enumerate(belief_models):
+            print(f"add belief {agentID} model to: {dev}")
+            lanja_bm = bm.clone(dev)
+            runners.append(
+                rela.BatchRunner(lanja_bm, dev, 5000, ["sample"])
+            )
 
 def make_model_runners(agents, devices, runners, methods):
     if not isinstance(agents, list):

@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch import nn
 import random
-from act_group_on_obl import ActGroup, BRActGroup
+from act_group_on_obl_v2 import ActGroup, BRActGroup
 # from act_group import ActGroup, BRActGroup
 from create import create_envs, create_threads
 from eval import evaluate
@@ -155,6 +155,8 @@ def parse_args():
 
     parser.add_argument("--coop_sync_freq", type=int, default=0)
     parser.add_argument("--mode", type=str, default="selfplay")
+    parser.add_argument("--finetune_coop_agents", type=bool, default=False)
+    parser.add_argument("--finetune_coop_agents_belief", type=bool, default=False)
 
     args = parser.parse_args()
     return args
@@ -170,7 +172,6 @@ def filter_include(entries, includes):
         else:
             keep.append(entry)
     return keep
-
 
 def filter_exclude(entries, excludes):
     if not isinstance(excludes, list):
@@ -331,46 +332,128 @@ if __name__ == "__main__":
     print(f"Initial BR agent self-play eval score: {score}, perfect: {perfect}")
     print("================\n")
 
-    coop_agents = None
-    coop_eval_agents = []
-    if args.load_model and args.load_model != "None":
-        model_paths = args.load_model
-        coop_ckpts = []
-        for i, model_path in enumerate(model_paths):
-            print(f"Loading model from {model_path}")
-            coop_ckpts.append(common_utils.ModelCkpt(model_path))
-            print("*****done*****")    
-        coop_agents = utils.load_coop_agents(coop_ckpts, device="cpu", vdn=(args.method == "vdn"), multi_step=args.multi_step)
-        for i, agent in enumerate(coop_agents):
-            coop_eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
-            score, perfect = evaluate_agent(coop_eval_agent, args)
-            print("\n================")
-            print(f"Initial Coop Agent {i} self-play eval score: {score}, perfect: {perfect}")
-            print("================\n")
+    if args.finetune_coop_agents:
+        if args.finetune_coop_agents_belief:
+            bool_trinary = False
+        else:
+            bool_trinary = True
+        if args.load_model and args.load_model != "None":
+            coop_agents = []
+            optim_agents = []
+            eval_coop_agents = []
+            act_group_agents = []
+            replay_buffer_agents = []
+            for i in range(len(args.load_model)):
+                coop_agents.append(r2d2.R2D2Agent(
+                    (args.method == "vdn"),
+                    args.multi_step,
+                    args.gamma,
+                    args.eta,
+                    args.train_device,
+                    games[0].feature_size(args.sad),
+                    args.rnn_hid_dim,
+                    games[0].num_action(),
+                    args.net,
+                    args.num_lstm_layer,
+                    args.boltzmann_act,
+                    False,
+                    0,
+                ))
+                coop_agents[i].sync_target_with_online()
+                coop_agents[i] = coop_agents[i].to(args.train_device)
+                optim_agents.append(torch.optim.Adam(coop_agents[i].online_net.parameters(), lr=args.lr, eps=args.eps))
+                print(f"\n\n*****loading pretrained model {i} for training*****")
+                print(args.load_model[i])
+                utils.load_weight(coop_agents[i].online_net, args.load_model[i], args.train_device)
+                eval_coop_agents.append(coop_agents[i].clone(args.train_device, {"vdn": False, "boltzmann_act": False}))
+                eval_seed = (9917 + 0 * 999999) % 7777777
+                eval_coop_agents[i].load_state_dict(coop_agents[i].state_dict())
+                score, perfect, *_ = evaluate(
+                    [eval_coop_agents[i] for _ in range(args.num_player)],
+                    1000,
+                    eval_seed,
+                    args.eval_bomb,
+                    0,  # explore eps
+                    args.sad,
+                    args.hide_action,
+                    device=args.train_device,
+                )
+                print("================")
+                print(f"Initial eval score for pretrained model {i}: {score}, perfect: {perfect}")
+                print("================")
+                print(f"*****done*****\n\n")
+                replay_buffer_agents.append(rela.RNNPrioritizedReplay(
+                    args.replay_buffer_size,
+                    args.seed,
+                    args.priority_exponent,
+                    args.priority_weight,
+                    args.prefetch,
+                ))
+
+                act_group_agents.append(ActGroup(
+                    args.act_device,
+                    coop_agents[i],
+                    args.seed,
+                    args.num_thread,
+                    args.num_game_per_thread,
+                    args.num_player,
+                    explore_eps,
+                    boltzmann_t,
+                    args.method,
+                    args.sad,
+                    args.shuffle_color,
+                    args.hide_action,
+                    bool_trinary,  # trinary, 3 bits for aux task
+                    replay_buffer_agents[i],
+                    args.multi_step,
+                    args.max_len,
+                    args.gamma,
+                    0,
+                    None,
+                ))
+    else:
+        coop_agents = None
+        coop_eval_agents = []
+        if args.load_model and args.load_model != "None":
+            model_paths = args.load_model
+            coop_ckpts = []
+            for i, model_path in enumerate(model_paths):
+                print(f"Loading model from {model_path}")
+                coop_ckpts.append(common_utils.ModelCkpt(model_path))
+                print("*****done*****")    
+            coop_agents = utils.load_coop_agents(coop_ckpts, device="cpu", vdn=(args.method == "vdn"), multi_step=args.multi_step)
+            for i, agent in enumerate(coop_agents):
+                coop_eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+                score, perfect = evaluate_agent(coop_eval_agent, args)
+                print("\n================")
+                print(f"Initial Coop Agent {i} self-play eval score: {score}, perfect: {perfect}")
+                print("================\n")
 
     belief_model = None
     belief_model = []
     if args.belief_model != "None":
+        if args.finetune_coop_agents_belief:
+            optim_belief = []
         belief_model_dirs = os.listdir(args.belief_model)
         belief_model_dirs = sorted(belief_model_dirs)
         belief_devices = args.act_device.split(",")
-        for device in belief_devices:
-            for belief_model_dir in belief_model_dirs:
-                belief_model_dir = os.path.join(args.belief_model, belief_model_dir)
-                belief_model_pth = os.path.join(belief_model_dir, "latest.pthw")
-                print(f"load belief model from belief model : {belief_model_pth} on device {device}")
-
-                belief_config = utils.get_train_config(belief_model_pth)
-
-                belief_model.append(
-                    ARBeliefModel.load(
-                        belief_model_pth,
-                        device,
-                        5,
-                        args.num_fict_sample,
-                        belief_config["fc_only"],
-                    )
+        for i, belief_model_dir in enumerate(belief_model_dirs):
+            belief_model_dir = os.path.join(args.belief_model, belief_model_dir)
+            belief_model_pth = os.path.join(belief_model_dir, "latest.pthw")
+            print(f"load belief model from belief model : {belief_model_pth} on device {args.train_device}")
+            belief_config = utils.get_train_config(belief_model_pth)
+            belief_model.append(
+                ARBeliefModel.load(
+                    belief_model_pth,
+                    args.train_device,
+                    5,
+                    args.num_fict_sample,
+                    belief_config["fc_only"],
                 )
+            )
+            if args.finetune_coop_agents_belief:
+                optim_belief.append(torch.optim.Adam(belief_model[i].parameters(), lr=args.lr, eps=args.eps))
+    
     act_group_args = {
         "devices": args.act_device,
         "agent": agent_br,
@@ -384,7 +467,7 @@ if __name__ == "__main__":
         "sad": args.sad,
         "shuffle_color": args.shuffle_color,
         "hide_action": args.hide_action,
-        "trinary": True,  # trinary, 3 bits for aux task
+        "trinary": False,  # trinary, 3 bits for aux task
         "replay_buffer": replay_buffer,
         "multi_step": args.multi_step,
         "max_len": args.max_len,
@@ -415,6 +498,32 @@ if __name__ == "__main__":
     while replay_buffer.size() < args.burn_in_frames:
         print("warming up replay buffer for cross-play:", replay_buffer.size())
         time.sleep(1)
+    print("warming up replay buffer for cross-play:", replay_buffer.size(), "\n")
+
+    if args.finetune_coop_agents:
+        games_agents = []
+        context_agents = []
+        for i in range(len(args.load_model)):
+            games_agents.append(create_envs(
+            args.num_thread * args.num_game_per_thread,
+            args.seed,
+            args.num_player,
+            args.train_bomb,
+            args.max_len,
+            ))
+            context_agents.append(create_threads(
+                args.num_thread,
+                args.num_game_per_thread,
+                act_group_agents[i].actors,
+                games_agents[i],
+            ))
+            act_group_agents[i].start()
+            context_agents[i][0].start()
+            time.sleep(1)
+            while replay_buffer_agents[i].size() < args.burn_in_frames:
+                print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size())
+                time.sleep(1)
+            print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size(), "\n")
 
     if args.sp_weight > 0:
         # SELF_PLAY
@@ -450,7 +559,7 @@ if __name__ == "__main__":
             args.sad,
             args.shuffle_color,
             args.hide_action,
-            True,  # trinary, 3 bits for aux task
+            False,  # trinary, 3 bits for aux task
             sp_replay_buffer,
             args.multi_step,
             args.max_len,
@@ -477,8 +586,6 @@ if __name__ == "__main__":
     print("Success, Done")
     print("=======================")
 
-    # import pdb; pdb.set_trace()
-
     frame_stat = dict()
     frame_stat["num_acts"] = 0
     frame_stat["num_buffer"] = 0
@@ -486,11 +593,34 @@ if __name__ == "__main__":
     cp_stat = common_utils.MultiCounter(args.save_dir)
     cp_tachometer = utils.Tachometer()
     cp_stopwatch = common_utils.Stopwatch()
+    
     if args.sp_weight > 0:
         sp_stat = common_utils.MultiCounter(args.save_dir)
         sp_tachometer = utils.Tachometer()
         sp_stopwatch = common_utils.Stopwatch()
     
+    if args.finetune_coop_agents:
+        stat_agents = []
+        tachometer_agents = []
+        stopwatch_agents = []
+        for i in range(len(args.load_model)):
+            model_dir = os.path.dirname(args.load_model[i])
+            stat_agents.append(common_utils.MultiCounter(model_dir))
+            tachometer_agents.append(utils.Tachometer())
+            stopwatch_agents.append(common_utils.Stopwatch())
+    
+    if args.finetune_coop_agents_belief:
+        stat_coop_agents_belief = []
+        tachometer_coop_agents_belief = []
+        stopwatch_coop_agents_belief = []
+        belief_model_dirs = os.listdir(args.belief_model)
+        belief_model_dirs = sorted(belief_model_dirs)
+        for i in range(len(belief_model_dirs)):
+            belief_model_dir = os.path.join(args.belief_model, belief_model_dirs[i])
+            stat_coop_agents_belief.append(common_utils.MultiCounter(belief_model_dir))
+            tachometer_coop_agents_belief.append(utils.Tachometer())
+            stopwatch_coop_agents_belief.append(common_utils.Stopwatch())
+
     for epoch in range(args.num_epoch):
         print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
@@ -501,30 +631,36 @@ if __name__ == "__main__":
             sp_tachometer.start()
             sp_stat.reset()
             sp_stopwatch.reset()
+        if args.finetune_coop_agents:
+            for i in range(len(args.load_model)):
+                stat_agents[i].reset()
+                tachometer_agents[i].start()
+                stopwatch_agents[i].reset()
+        if args.finetune_coop_agents_belief:
+            for i in range(len(belief_model_dirs)):
+                stat_coop_agents_belief[i].reset()
+                tachometer_coop_agents_belief[i].start()
+                stopwatch_coop_agents_belief[i].reset()
 
         for batch_idx in tqdm(range(args.epoch_len), desc=f'Training', bar_format='{l_bar}{bar:20}{r_bar}', leave=True):
             num_update = batch_idx + epoch * args.epoch_len
+
             if num_update % args.num_update_between_sync == 0:
                 agent_br.sync_target_with_online()
+                for i in range(len(args.load_model)):
+                    coop_agents[i].sync_target_with_online()
+                print(f"\nSynced target with online for BR agent and {len(args.load_model)} coop agents")
+
             if num_update % args.actor_sync_freq == 0:
                 act_group.update_model(agent_br)
                 if args.sp_weight > 0:
                     sp_act_group.update_model(agent_br)
-            if args.coop_sync_freq and num_update % args.coop_sync_freq == 0:
-                print(f">>>step {num_update}, sync models")
-                if save_future is None or save_future.done():
-                    save_future = sync_pool.submit(
-                        utils.save_intermediate_model,
-                        copy.deepcopy(agent_br.online_net.state_dict()),
-                        save_ckpt,
-                    )
-                if coop_agents is not None and (
-                    coop_future is None or coop_future.done()
-                ):
-                    coop_future = sync_pool.submit(
-                        utils.update_intermediate_coop_agents, coop_ckpts, act_group
-                    )
-                print(f"<<<step {num_update}, sync done")
+                if args.finetune_coop_agents:
+                    act_group.update_coop_models(coop_agents)
+                    for i in range(len(args.load_model)):
+                        act_group_agents[i].update_model(coop_agents[i])
+                if args.finetune_coop_agents_belief:
+                    act_group.update_belief_models(belief_model)
 
             torch.cuda.synchronize()
             cp_stopwatch.time("sync and updating")
@@ -583,8 +719,56 @@ if __name__ == "__main__":
                 sp_stat["grad_norm"].feed(g_norm)
                 sp_stat["boltzmann_t"].feed(sp_batch.obs["temperature"][0].mean())
 
+            if args.finetune_coop_agents:
+                for i in range(len(args.load_model)):
+                    batch, weight = replay_buffer_agents[i].sample(args.batchsize, args.train_device)
+                    stopwatch_agents[i].time(f"sample data agent {i}")    
+
+                    loss_agent, priority, online_q = coop_agents[i].loss(batch, args.aux_weight, stat_agents[i])
+                    
+                    loss_agent = (loss_agent * weight).mean()
+                    loss_agent.backward()
+                    torch.cuda.synchronize()
+                    stopwatch_agents[i].time(f"forward & backward agent {i}")
+                    
+                    g_norm = torch.nn.utils.clip_grad_norm_(
+                        coop_agents[i].online_net.parameters(), args.grad_clip
+                    )
+                    
+                    optim_agents[i].step()
+                    optim_agents[i].zero_grad()
+                    torch.cuda.synchronize()
+                    stopwatch_agents[i].time(f"update model agent {i}")
+                    
+                    if args.finetune_coop_agents_belief:    
+                        assert weight.max() == 1
+                        loss_belief, xent, xent_v0, _ = belief_model[i].loss(batch)
+                        loss_belief = loss_belief.mean()
+                        loss_belief.backward()
+                        stopwatch_agents[i].time(f"forward & backward belief {i}")
+                        g_norm_belief = torch.nn.utils.clip_grad_norm_(
+                            belief_model[i].parameters(), args.grad_clip
+                        )
+                        optim_belief[i].step()
+                        optim_belief[i].zero_grad()
+                        stopwatch_agents[i].time(f"update model belief {i}")
+                    
+                    replay_buffer_agents[i].update_priority(priority)
+                    stopwatch_agents[i].time(f"updating priority agent {i}")
+                    
+                    stat_agents[i]["loss"].feed(loss.detach().item())
+                    stat_agents[i]["grad_norm"].feed(g_norm)
+                    stat_agents[i]["boltzmann_t"].feed(batch.obs["temperature"][0].mean())
+
+                    if args.finetune_coop_agents_belief:
+                        stat_coop_agents_belief[i]["loss"].feed(loss_belief.detach().item())
+                        stat_coop_agents_belief[i]["grad_norm"].feed(g_norm_belief)
+                        stat_coop_agents_belief[i]["xent_pred"].feed(xent.detach().mean().item())
+                        stat_coop_agents_belief[i]["xent_v0"].feed(xent_v0.detach().mean().item())
+
         count_factor = args.num_player if args.method == "vdn" else 1
         print("EPOCH: %d" % epoch)
+        print("\n=====Agent BR======")
         cp_tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, count_factor)
         cp_stopwatch.summary()
         cp_stat.summary(epoch)
@@ -592,28 +776,38 @@ if __name__ == "__main__":
             sp_tachometer.lap(sp_replay_buffer, args.epoch_len * args.batchsize, count_factor)
             sp_stopwatch.summary()
             sp_stat.summary(epoch)
+        if args.finetune_coop_agents:
+            for i in range(len(args.load_model)):
+                print(f"\n=====Agent {i}======")
+                tachometer_agents[i].lap(replay_buffer_agents[i], args.epoch_len * args.batchsize, count_factor)
+                stopwatch_agents[i].summary()
+                stat_agents[i].summary(epoch)
+                if args.finetune_coop_agents_belief:
+                    print(f"\n=====Belief {i}======")
+                    tachometer_coop_agents_belief[i].lap(replay_buffer_agents[i], args.epoch_len * args.batchsize, count_factor)
+                    stopwatch_coop_agents_belief[i].summary()
+                    stat_coop_agents_belief[i].summary(epoch)
 
-
-        for i in range(2):
+        # EVALUATION
+        for i in range(len(args.load_model)+2):
             eval_seed = (9917 + epoch * 999999 + i) % 7777777
             if i==0:
                 eval_agent.load_state_dict(agent_br.state_dict())
                 eval_agents = [eval_agent for _ in range(args.num_player)]
-                if coop_agents is not None:
-                    coop_eval_agents = utils.load_coop_agents(
-                        coop_ckpts,
-                        overwrites={"vdn": False, "boltzmann_act": False},
-                        device=args.train_device,
-                    )
+                for j in range(len(args.load_model)):
+                    eval_coop_agents[j].load_state_dict(coop_agents[j].state_dict())
                     eval_idxs = np.random.choice(
-                        len(coop_eval_agents), args.num_player - 1, replace=False
+                        len(eval_coop_agents), args.num_player - 1, replace=False
                     )
                     eval_agents = [eval_agent]
                     for idx in eval_idxs:
-                        eval_agents.append(coop_eval_agents[idx])
-            else:
+                        eval_agents.append(eval_coop_agents[idx])
+            elif i==1:
                 eval_agent.load_state_dict(agent_br.state_dict())
                 eval_agents = [eval_agent for _ in range(args.num_player)]
+            else:
+                eval_coop_agents[i-2].load_state_dict(coop_agents[i-2].state_dict())
+                eval_agents = [eval_coop_agents[i-2] for _ in range(args.num_player)]
 
             score, perfect, *_ = evaluate(
                 eval_agents,
@@ -629,18 +823,35 @@ if __name__ == "__main__":
             if i==0:
                 print("\n=====Eval Scores=====")
                 print(f"BR agent cross-play eval score: {score}, perfect: {perfect}")
-            else:
+            elif i==1:
                 print(f"BR agent self-play eval score: {score}, perfect: {perfect}")
+            else:
+                print(f"Agent {i-2} eval score: {score}, perfect: {perfect}")
 
+        # save model
         force_save_name = None
         if epoch > 0 and epoch % args.save_model_after == 0:
-            force_save_name = f"BR_agent_seed_{args.seed}_epoch_{epoch}"
-            model_saved = saver.save(
-                None, agent_br.online_net.state_dict(), score, force_save_name=force_save_name
-            )
-            print(f"BR agent saved: {model_saved}")
+            for i in range(len(args.load_model)+1):
+                if i==0:
+                    force_save_name = f"BR_agent_seed_{args.seed}_epoch_{epoch}"
+                    model_saved = saver.save(
+                        None, agent_br.online_net.state_dict(), score, force_save_name=force_save_name
+                    )
+                    print(f"BR agent saved: {model_saved}")
+                else:
+                    force_save_name = f"coop_agent_{i}_seed_{args.seed}_epoch_{epoch}"
+                    model_saved = saver.save(
+                        None, coop_agents[i-1].online_net.state_dict(), score, force_save_name=force_save_name
+                    )
+                    print(f"Agent {i} saved: {model_saved}")
+                    if args.finetune_coop_agents_belief:
+                        force_save_name = f"belief_model_{i}_seed_{args.seed}"
+                        model_saved = saver.save(
+                            None, belief_model[i-1].state_dict(), -stat_coop_agents_belief[i-1]["loss"].mean(), force_save_name=force_save_name
+                        )
+                        print(f"Belief model {i} saved: {model_saved}")
 
-
+        # Belief model
         if args.off_belief:
             actors = common_utils.flatten(act_group.actors)
             success_fict = [actor.get_success_fict_rate() for actor in actors]

@@ -243,3 +243,27 @@ class ARBeliefModel(torch.jit.ScriptModule):
             "h0": h.transpose(0, 1).contiguous(),
             "c0": c.transpose(0, 1).contiguous(),
         }
+
+    # @torch.jit.script_method
+    def clone(self, device, bool_train=True):
+        if hasattr(self, 'in_dim') and hasattr(self, 'hid_dim') and hasattr(self, 'hand_size') and hasattr(self, 'out_dim') and hasattr(self, 'num_sample') and hasattr(self, 'fc_only'):
+            # For ARBeliefModel
+            lanja_bm = type(self)(
+                device,
+                self.in_dim,
+                self.hid_dim, 
+                self.hand_size,
+                self.out_dim,
+                self.num_sample,
+                self.fc_only
+            )
+        else:
+            # For V0BeliefModel or other types
+            lanja_bm = type(self)(device, self.num_sample)
+        
+        # Load the state dict from original model
+        lanja_bm.load_state_dict(self.state_dict())
+        lanja_bm.train(True)
+        lanja_bm = lanja_bm.to(device)
+        return lanja_bm
+

@@ -438,6 +438,7 @@ if __name__ == "__main__":
         print("warming up BR agent replay buffer:", replay_buffer.size())
         time.sleep(1)
     print("warming up BR agent replay buffer:", replay_buffer.size(), "\n")
+    
     games_agents = []
     context_agents = []
     for i in range(len(args.load_model)):
