@@ -75,8 +75,10 @@ def parse_args():
     parser.add_argument("--eval_bomb", type=int, default=0)
     parser.add_argument("--sad", type=int, default=0)
     parser.add_argument("--num_player", type=int, default=2)
+    parser.add_argument("--fc_only", type=int, default=0)
 
     # optimization/training settings
+    parser.add_argument("--start_epoch", type=int, default=0)
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--eps", type=float, default=1.5e-5, help="Adam epsilon")
     parser.add_argument("--grad_clip", type=float, default=5, help="max grad norm")
@@ -128,6 +130,7 @@ def parse_args():
     parser.add_argument("--num_eval_after", type=int, default=100)
     parser.add_argument("--save_model_after", type=int, default=100)
     parser.add_argument("--actor_sync_freq", type=int, default=10)
+    parser.add_argument("--coop_agent_belief_sync_freq", type=int, default=10)
     parser.add_argument("--dataset_path", type=str, default="/data/kmirakho/offline-model/dataset_rl_1040640_sml.npz")
 
     #behaviour policy
@@ -434,12 +437,13 @@ if __name__ == "__main__":
     if args.belief_model != "None":
         if args.finetune_coop_agents_belief:
             optim_belief = []
-        belief_model_dirs = os.listdir(args.belief_model)
-        belief_model_dirs = sorted(belief_model_dirs)
+        belief_model_files = os.listdir(args.belief_model)
+        belief_model_files = sorted(belief_model_files)
         belief_devices = args.act_device.split(",")
-        for i, belief_model_dir in enumerate(belief_model_dirs):
-            belief_model_dir = os.path.join(args.belief_model, belief_model_dir)
-            belief_model_pth = os.path.join(belief_model_dir, "latest.pthw")
+        for i, belief_model_file in enumerate(belief_model_files):
+            belief_model_pth = os.path.join(args.belief_model, belief_model_file)
+            if "belief" not in belief_model_file:
+                continue
             print(f"load belief model from belief model : {belief_model_pth} on device {args.train_device}")
             belief_config = utils.get_train_config(belief_model_pth)
             belief_model.append(
@@ -452,7 +456,7 @@ if __name__ == "__main__":
                 )
             )
             if args.finetune_coop_agents_belief:
-                optim_belief.append(torch.optim.Adam(belief_model[i].parameters(), lr=args.lr, eps=args.eps))
+                optim_belief.append(torch.optim.Adam(belief_model[-1].parameters(), lr=args.lr, eps=args.eps))
     
     act_group_args = {
         "devices": args.act_device,
@@ -613,15 +617,13 @@ if __name__ == "__main__":
         stat_coop_agents_belief = []
         tachometer_coop_agents_belief = []
         stopwatch_coop_agents_belief = []
-        belief_model_dirs = os.listdir(args.belief_model)
-        belief_model_dirs = sorted(belief_model_dirs)
-        for i in range(len(belief_model_dirs)):
-            belief_model_dir = os.path.join(args.belief_model, belief_model_dirs[i])
-            stat_coop_agents_belief.append(common_utils.MultiCounter(belief_model_dir))
+        for i in range(len(belief_model)):
+            stat_coop_agents_belief.append(common_utils.MultiCounter(args.belief_model))
             tachometer_coop_agents_belief.append(utils.Tachometer())
             stopwatch_coop_agents_belief.append(common_utils.Stopwatch())
 
-    for epoch in range(args.num_epoch):
+    total_epoch = args.start_epoch + args.num_epoch
+    for epoch in range(args.start_epoch, total_epoch):
         print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
         cp_tachometer.start()
@@ -637,7 +639,7 @@ if __name__ == "__main__":
                 tachometer_agents[i].start()
                 stopwatch_agents[i].reset()
         if args.finetune_coop_agents_belief:
-            for i in range(len(belief_model_dirs)):
+            for i in range(len(belief_model)):
                 stat_coop_agents_belief[i].reset()
                 tachometer_coop_agents_belief[i].start()
                 stopwatch_coop_agents_belief[i].reset()
@@ -656,9 +658,12 @@ if __name__ == "__main__":
                 if args.sp_weight > 0:
                     sp_act_group.update_model(agent_br)
                 if args.finetune_coop_agents:
-                    act_group.update_coop_models(coop_agents)
                     for i in range(len(args.load_model)):
-                        act_group_agents[i].update_model(coop_agents[i])
+                        act_group_agents[i].update_model(coop_agents[i]) 
+                               
+            if num_update % args.coop_agent_belief_sync_freq == 0:
+                if args.finetune_coop_agents:
+                    act_group.update_coop_models(coop_agents)
                 if args.finetune_coop_agents_belief:
                     act_group.update_belief_models(belief_model)
 
