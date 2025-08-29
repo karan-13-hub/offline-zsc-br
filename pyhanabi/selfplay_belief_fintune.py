@@ -234,7 +234,7 @@ if __name__ == "__main__":
     )
 
     belief_model = None
-    if args.off_belief and args.belief_model != "None":
+    if args.belief_model != "None":
         print(f"load belief model from {args.belief_model}")
         from belief_model import ARBeliefModel
 
