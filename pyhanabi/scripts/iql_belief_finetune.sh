@@ -6,8 +6,8 @@
 #
 #!/bin/bash
 python selfplay_fintune.py\
-       --save_dir exps/br_medium_data_seed_777_31337_1e9+7/coop_agent_cp_bc_0.4_finetune/agent_2\
-       --load_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4/model_seed_9_agent_2_epoch_150.pthw \
+       --save_dir exps/br_medium_data_seed_9_42_1234/coop_agent_cp_bc_0.4_finetune/agent_2\
+       --load_model exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35_finetune/agent_2/model_seed_9_agent_2_epoch_150.pthw \
        --num_thread 80\
        --num_game_per_thread 80\
        --num_data_thread 4\
@@ -30,5 +30,5 @@ python selfplay_fintune.py\
        --num_player 2\
        --num_lstm_layer 2\
        --multi_step 3\
-       --act_device cuda:5,cuda:6\
-       --train_device cuda:7
+       --act_device cuda:7,cuda:5\
+       --train_device cuda:6

@@ -6,11 +6,11 @@
 #
 #!/bin/bash
 python selfplay_mi_sim_br_on_obl_with_agent_belief_finetune.py \
-       --save_dir exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune_contd \
-       --clu_mod_dir exps/br_medium_data_seed_777_31337_1e9+7/vdn_cp_bc_0.4_finetune\
-       --load_br_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/BR_agent_seed_9_epoch_400.pthw\
-       --load_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_1_seed_9_epoch_400.pthw exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_2_seed_9_epoch_400.pthw exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_3_seed_9_epoch_400.pthw\
-       --belief_model exps/br_medium_data_seed_777_31337_1e9+7/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/ \
+       --save_dir exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune_contd \
+       --clu_mod_dir exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35_finetune\
+       --load_br_model exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/BR_agent_seed_9_epoch_300.pthw\
+       --load_model exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_1_seed_9_epoch_300.pthw exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_2_seed_9_epoch_300.pthw exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/coop_agent_3_seed_9_epoch_300.pthw\
+       --belief_model exps/br_medium_data_seed_9_42_1234/vdn_on_cp_obl_finetune_TRY_with_sp_0.0_agent_belief_finetune/ \
        --num_thread 80 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -40,13 +40,15 @@ python selfplay_mi_sim_br_on_obl_with_agent_belief_finetune.py \
        --coeff_selfplay 0.0 \
        --sp_weight 0.0 \
        --save_model_after 100 \
+       --coop_agent_belief_sync_freq 5000 \
        --num_player 2 \
        --rnn_hid_dim 512 \
        --num_agents 3\
        --multi_step 1 \
+       --coop_multi_step 1 \
        --start_epoch 400 \
-       --act_device cuda:2,cuda:3 \
-       --train_device cuda:1 \
+       --act_device cuda:3,cuda:4 \
+       --train_device cuda:2 \
        --finetune_coop_agents 1 \
        --off_belief 1 \
        --finetune_coop_agents_belief 1 \

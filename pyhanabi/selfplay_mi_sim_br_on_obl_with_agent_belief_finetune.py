@@ -96,6 +96,7 @@ def parse_args():
 
     # DQN settings
     parser.add_argument("--multi_step", type=int, default=1)
+    parser.add_argument("--coop_multi_step", type=int, default=3)
 
     # replay buffer settings
     parser.add_argument("--load_after", type=int, default=20)
@@ -349,7 +350,7 @@ if __name__ == "__main__":
             for i in range(len(args.load_model)):
                 coop_agents.append(r2d2.R2D2Agent(
                     (args.method == "vdn"),
-                    args.multi_step,
+                    args.coop_multi_step,
                     args.gamma,
                     args.eta,
                     args.train_device,
@@ -408,7 +409,7 @@ if __name__ == "__main__":
                     args.hide_action,
                     bool_trinary,  # trinary, 3 bits for aux task
                     replay_buffer_agents[i],
-                    args.multi_step,
+                    args.coop_multi_step,
                     args.max_len,
                     args.gamma,
                     0,
@@ -424,7 +425,7 @@ if __name__ == "__main__":
                 print(f"Loading model from {model_path}")
                 coop_ckpts.append(common_utils.ModelCkpt(model_path))
                 print("*****done*****")    
-            coop_agents = utils.load_coop_agents(coop_ckpts, device="cpu", vdn=(args.method == "vdn"), multi_step=args.multi_step)
+            coop_agents = utils.load_coop_agents(coop_ckpts, device="cpu", vdn=(args.method == "vdn"), multi_step=args.coop_multi_step)
             for i, agent in enumerate(coop_agents):
                 coop_eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
                 score, perfect = evaluate_agent(coop_eval_agent, args)
@@ -471,7 +472,7 @@ if __name__ == "__main__":
         "sad": args.sad,
         "shuffle_color": args.shuffle_color,
         "hide_action": args.hide_action,
-        "trinary": False,  # trinary, 3 bits for aux task
+        "trinary": True,  # trinary, 3 bits for aux task
         "replay_buffer": replay_buffer,
         "multi_step": args.multi_step,
         "max_len": args.max_len,
@@ -563,7 +564,7 @@ if __name__ == "__main__":
             args.sad,
             args.shuffle_color,
             args.hide_action,
-            False,  # trinary, 3 bits for aux task
+            True,  # trinary, 3 bits for aux task
             sp_replay_buffer,
             args.multi_step,
             args.max_len,
@@ -666,6 +667,8 @@ if __name__ == "__main__":
                     act_group.update_coop_models(coop_agents)
                 if args.finetune_coop_agents_belief:
                     act_group.update_belief_models(belief_model)
+                
+                print(f"Synced coop agents and belief models with BR act group")
 
             torch.cuda.synchronize()
             cp_stopwatch.time("sync and updating")

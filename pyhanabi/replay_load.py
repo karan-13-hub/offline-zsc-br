@@ -422,7 +422,7 @@ class LoadDataset:
         # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_80']#, '/data/kmirakho/vdn-offline-data-seed-42/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_20','/data/kmirakho/vdn-offline-data-seed-777/data_40','/data/kmirakho/vdn-offline-data-seed-777/data_80']
-        folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_80']
+        folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_80', '/data/kmirakho/vdn-offline-data-seed-31337/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-31337/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80']
@@ -434,7 +434,7 @@ class LoadDataset:
             print(f"Loading dataset from {folder}")
             #randomly select 50% of the files from each folder
             files = glob(os.path.join(self.data_path, folder, '*.npz'))
-            # files = random.sample(files, int(len(files) * 0.5))
+            files = random.sample(files, int(len(files) * 0.5))
             filenames.extend(files)
             # filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
         filenames = filenames[:1000]

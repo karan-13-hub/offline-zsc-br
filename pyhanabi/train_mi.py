@@ -569,4 +569,5 @@ if __name__ == "__main__":
     # train_mi(args, batch_loader, 1000, 0.0)
     cluster_save_path = os.path.join(args.clu_mod_dir, 'best_cluster.pt')
     model_save_path = os.path.join(args.clu_mod_dir, 'best_model.pt')
+    # encoder, cluster_centers_tensor = load_cluster(cluster_save_path, model_save_path, args)
     plot_tsne(batch_loader, cluster_save_path, model_save_path, args)
