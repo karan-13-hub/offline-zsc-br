@@ -86,6 +86,7 @@ def parse_args():
 
     # DQN settings
     parser.add_argument("--multi_step", type=int, default=3)
+    parser.add_argument("--data_sample", type=float, default=1.0)
 
     # replay buffer settings
     parser.add_argument("--load_after", type=int, default=20)
@@ -132,6 +133,9 @@ def parse_args():
     parser.add_argument("--sp_weight", type=float, default=1.0)
     parser.add_argument("--cp_weight", type=float, default=1.0)
     parser.add_argument("--wgt_thr", type=float, default=0.0)
+    parser.add_argument("--cql", type=bool, default=False)
+    parser.add_argument("--cql_weight", type=float, default=0.0)
+
     #diversity loss
     parser.add_argument("--div", type=bool, default=False)
     parser.add_argument("--div_weight", type=float, default=1.0)
@@ -384,7 +388,7 @@ if __name__ == "__main__":
         return weights
 
     #train the agents
-    for epoch in range(args.num_epoch+1):
+    for epoch in range(args.num_epoch):
         # Decay bc_weight if decay_bc is set
         if args.decay_bc > 0 and epoch <= args.decay_bc:
             # Linear decay from initial bc_weight to eps
@@ -434,6 +438,7 @@ if __name__ == "__main__":
             # Store losses for each agent to combine later
             agent_losses = []
             agent_loss_weights = []
+            online_q_values = [None] * args.num_agents  # Initialize with None for each agent
             
             # Run forward and backward passes for all agents in parallel
             for i in range(args.num_agents):
@@ -450,8 +455,13 @@ if __name__ == "__main__":
                 agent_loss_weights.append(agent_weights)
                 
                 # Apply the agent's loss calculation
-                loss, bc_loss, priority, _, _ = agents[i].loss(batch, args.aux_weight, stat, args.bc)
-                
+                loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
+                max_len = online_q.shape[0]
+                batch_size = online_q.shape[1]//args.num_player
+                online_q = online_q.reshape(max_len, batch_size, args.num_player, -1)
+                online_q = online_q.sum(dim=-2)
+                online_q_values[i] = online_q
+
                 # Weight losses by distance-based weights
                 weighted_loss_sp = args.sp_weight * loss * agent_weights
                 weighted_loss_bc = args.bc_weight * bc_loss * agent_weights
@@ -494,12 +504,13 @@ if __name__ == "__main__":
             if args.div and args.div_weight > 0:
                 # Calculate diversity loss separately for each agent, with that agent's Q-values having gradients
                 agent_div_losses = []
-                for i in range(args.num_agents):
-                    div_loss = diversity_loss(online_q_values, valid_masks, args, i)
-                    agent_div_losses.append(div_loss * agent_loss_weights[i])
+                div_loss = diversity_loss(online_q_values, mask, args)
+                agent_loss_weights = torch.stack(agent_loss_weights)
+                div_loss = agent_loss_weights * div_loss
+                div_loss = div_loss.mean(dim=-1)
                 
                 # Sum the diversity losses from all agents
-                loss_div = args.div_weight * sum(agent_div_losses)
+                loss_div = args.div_weight * div_loss.sum()
 
             # Aggregate all agent losses with their weights
             loss_sp = sum([loss_tuple[0] for loss_tuple in agent_losses])

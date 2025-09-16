@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Tuple, Dict
 import pdb
+from functools import partial
 
 def td_error(
     agent_1,
@@ -274,7 +275,7 @@ def td_error_br(
     else:
         cql_loss = torch.zeros(1, device=err_1_2.device)
     # Return both sets of values and the errors
-    return err_1_2, ag1_online_q_diversity, bc_loss, cql_loss, mask
+    return err_1_2, bc_loss, cql_loss
 
 def cp_loss(agents_1, agents_2, batch, stat, args):
     err_1_2, err_2_1, ag1_online_q_diversity, ag2_online_q_diversity, valid_mask = td_error(
@@ -383,10 +384,8 @@ def q_ensemble_loss(agent_br, agents, agent_weights, batch, args):
 
 def train_br_agent(agent_br, agents, agent_weights, batch, args):   
     cp_loss = torch.tensor(0.0, device=args.train_device)
-    online_q_values = []
-    valid_masks = []
     for i, agent in enumerate(agents):
-        err, online_q_diversity, bc_loss, cql_loss, valid_mask = td_error_br(
+        err, bc_loss, cql_loss = td_error_br(
             agent,
             agent_br,
             batch.obs,
@@ -405,68 +404,115 @@ def train_br_agent(agent_br, agents, agent_weights, batch, args):
         bc_loss = bc_loss.sum(0)
         cql_loss = cql_loss.sum(0)   
         cp_loss = cp_loss + agent_weights[i] * rl_loss
-        online_q_values.append(online_q_diversity)
-        valid_masks.append(valid_mask)
     cp_loss = cp_loss + args.cp_bc_weight * bc_loss + args.cp_cql_weight * cql_loss
-    return cp_loss, online_q_values, valid_masks
+    return cp_loss
+
+def train_br_agent_parallel_manual(agent_br, agents, agent_weights, batch, args):
+    """
+    Alternative parallelized version using manual parallel processing.
+    This version processes agents in parallel using multiprocessing or concurrent.futures.
+    """
+    import concurrent.futures
+    import threading
+    
+    def process_single_agent(agent):
+        err, bc_loss, cql_loss = td_error_br(
+            agent,
+            agent_br,
+            batch.obs,
+            batch.h0,
+            batch.action,
+            batch.reward,
+            batch.terminal,
+            batch.bootstrap,
+            batch.seq_len,
+            args,
+        )
+        rl_loss = nn.functional.smooth_l1_loss(
+            err, torch.zeros_like(err), reduction="none"
+        )
+        rl_loss = rl_loss.sum(0)
+        bc_loss = bc_loss.sum(0)
+        cql_loss = cql_loss.sum(0)
+        return rl_loss, bc_loss, cql_loss
+    
+    # Use ThreadPoolExecutor for parallel processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agents), 4)) as executor:
+        # Submit all tasks
+        future_to_agent = {executor.submit(process_single_agent, agent): i 
+                          for i, agent in enumerate(agents)}
+        
+        # Collect results
+        rl_losses = []
+        bc_losses = []
+        cql_losses = []
+        
+        for future in concurrent.futures.as_completed(future_to_agent):
+            rl_loss, bc_loss, cql_loss = future.result()
+            rl_losses.append(rl_loss)
+            bc_losses.append(bc_loss)
+            cql_losses.append(cql_loss)
+    
+    # Calculate weighted sum
+    cp_loss = torch.tensor(0.0, device=args.train_device)
+    for i, (rl_loss, bc_loss, cql_loss) in enumerate(zip(rl_losses, bc_losses, cql_losses)):
+        cp_loss = cp_loss + agent_weights[i] * rl_loss
+    
+    # Add BC and CQL losses (using the last agent's losses)
+    cp_loss = cp_loss + args.cp_bc_weight * bc_losses[-1] + args.cp_cql_weight * cql_losses[-1]
+    
+    return cp_loss
 
 
-def diversity_loss(q_values, valid_masks, args, agent_ID):
+def diversity_loss(q_values, mask, args):
     """
     Calculate diversity loss between Q-values from different agents.
-    Only computes diversity for the specified agent_ID against other agents.
     
     Args:
         q_values: List of Q-value tensors from different agents
-        valid_masks: List of valid action masks for each agent
+        mask: valid action mask for all agents
         args: Arguments containing diversity loss configuration
-        agent_ID: ID of the agent for which to compute diversity loss
         
     Returns:
         diversity_loss: Tensor containing the calculated diversity loss
     """
     # Check if we have at least two Q-value tensors to compare
-    if len(q_values) < 2 or q_values[agent_ID] is None:
+    if len(q_values) < 2 or q_values[0] is None:
         return torch.tensor(0.0, device=q_values[0].device if q_values[0] is not None else "cpu")
     
     # Get the action dimension from the agent_ID's Q-value tensor
-    action_dim = q_values[agent_ID].size(-1)
+    action_dim = q_values[0].size(-1)
     
     # Selectively detach Q-values of all agents except agent_ID
     processed_q_values = []
-    for i, q in enumerate(q_values):
-        if i != agent_ID and q is not None:
-            processed_q_values.append(q.clone().detach())
-        else:
-            processed_q_values.append(q)
+    for _, q in enumerate(q_values):
+        processed_q_values.append(q.clone().detach())
     
     # For JSD, we'll only include agent_ID and calculate its divergence from others
     if args.div_type == 'jsd':
         # Only select Q-values that are not None
         valid_q_values = [q for q in processed_q_values if q is not None]
         if len(valid_q_values) < 2:
-            return torch.tensor(0.0, device=processed_q_values[agent_ID].device)
+            return torch.tensor(0.0, device=processed_q_values[0].device)
             
         # Convert all Q-values to probability distributions
         q_probs = torch.stack([nn.functional.softmax(q, dim=-1) for q in valid_q_values], dim=0)
         q_log_probs = torch.stack([nn.functional.log_softmax(q, dim=-1) for q in valid_q_values], dim=0)
+        actual_q_probs = torch.stack([nn.functional.softmax(q, dim=-1) for q in q_values], dim=0)
+        actual_q_log_probs = torch.stack([nn.functional.log_softmax(q, dim=-1) for q in q_values], dim=0)
         
         # Calculate the average probability distribution
         avg_probs = q_probs.mean(dim=0)
         avg_log = torch.log(avg_probs + 1e-10).detach()  # Add small epsilon to avoid log(0)
         
-        # Get the index of agent_ID in the valid_q_values list
-        agent_idx_in_valid = [i for i, q in enumerate(processed_q_values) if q is not None].index(agent_ID)
-    
-        # Calculate KL divergence from agent_ID's distribution to the average (JSD component)
-        agent_log_probs = q_log_probs[agent_idx_in_valid]
-        agent_probs = q_probs[agent_idx_in_valid]
-        jsd_loss = ((agent_log_probs - avg_log) * agent_probs).sum(dim=-1)
+        # Calculate KL divergence from all agent's distribution to the average (JSD component)
+        agent_log_probs = q_log_probs
+        agent_probs = q_probs
+        jsd_loss = ((actual_q_log_probs - avg_log) * actual_q_probs).sum(dim=-1)
+        valid_mask = mask.unsqueeze(0).repeat(actual_q_probs.shape[0], 1, 1)
         
         # Apply valid mask to the loss
-        valid_mask = torch.stack([m for i, m in enumerate(valid_masks) if processed_q_values[i] is not None], dim=0)
-        agent_valid_mask = valid_mask[agent_idx_in_valid]
-        jsd_loss = (jsd_loss * agent_valid_mask).sum(dim=0).sum(dim=0)
+        jsd_loss = (jsd_loss * valid_mask).sum(dim=1)
         
         return jsd_loss
     

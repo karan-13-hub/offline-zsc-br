@@ -1,7 +1,7 @@
 #!/bin/bash
 
 python train_mi.py \
-    --save_dir exps/br_medium_data_seed_9_42_1234_1e9+7/vdn_cp_bc_0.4 \
+    --save_dir exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7 \
     --method vdn \
     --shuffle_color 0 \
     --aux_weight 0.0 \
@@ -14,18 +14,19 @@ python train_mi.py \
     --belief_model None \
     --num_fict_sample 10 \
     --belief_device cuda:1 \
-    --clu_mod_dir exps/br_medium_data_seed_9_42_1234_1e9+7/ \
+    --clu_mod_dir exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7 \
     --seed 10001 \
     --num_player 2 \
     --lr 0.001 \
+    --beta 0.0 \
     --eps 1.5e-05 \
     --grad_clip 5.0 \
     --num_lstm_layer 2 \
     --rnn_hid_dim 512 \
-    --net "publ-lstm" \
-    --train_device "cuda:2" \
+    --net publ-lstm \
+    --train_device cuda:3 \
     --batchsize 128 \
-    --num_epoch 5000 \
+    --num_epoch 500 \
     --epoch_len 1000 \
     --multi_step 3 \
     --max_len 80 \
@@ -33,10 +34,12 @@ python train_mi.py \
     --num_thread 80 \
     --num_game_per_thread 80 \
     --num_data_thread 4 \
-    --num_agents 3 \
+    --num_agents 6 \
     --act_base_eps 0.1 \
     --act_eps_alpha 7.0 \
-    --act_device cuda:1 \
+    --act_device cuda:4 \
     --num_eval_after 100 \
     --save_model_after 100 \
     --actor_sync_freq 10 \
+    --reqd_con_eps 10 \
+    --grad_norm_threshold 1e-5 \

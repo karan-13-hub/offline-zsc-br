@@ -422,7 +422,13 @@ class LoadDataset:
         # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80', '/data/kmirakho/vdn-offline-data-seed1234/data_80']#, '/data/kmirakho/vdn-offline-data-seed-42/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_20','/data/kmirakho/vdn-offline-data-seed-777/data_40','/data/kmirakho/vdn-offline-data-seed-777/data_80']
-        folders = ['/data/kmirakho/vdn-offline-data-seed-777/data_80', '/data/kmirakho/vdn-offline-data-seed-31337/data_80', '/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80']
+        
+        # br_medium_data_seed_9_42_111_777_1234_31337
+        # folders = ['/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_9/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_42/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1234/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_31337/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_111/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_777/data_80']
+        
+        # br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7
+        folders = ['/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1337/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_31415/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_271828/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_380843/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_7777777/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1e9+7/data_80']
+        
         # folders = ['/data/kmirakho/vdn-offline-data-seed-31337/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80']
@@ -434,10 +440,10 @@ class LoadDataset:
             print(f"Loading dataset from {folder}")
             #randomly select 50% of the files from each folder
             files = glob(os.path.join(self.data_path, folder, '*.npz'))
-            files = random.sample(files, int(len(files) * 0.5))
+            files = random.sample(files, int(len(files) * self.args.data_sample))
             filenames.extend(files)
             # filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
-        filenames = filenames[:1000]
+        # filenames = filenames[:10000]
         # #load the filenames from the split1.txt file
         # print(f"Loading dataset from split1.txt")
         # with open('/data/kmirakho/vdn-offline-data/split_medium_replay_in_2/split1.txt', 'r') as f:

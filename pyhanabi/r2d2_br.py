@@ -294,7 +294,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         seq_len: torch.Tensor,
         bc: bool,
         cql: bool,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         
         max_seq_len = obs["priv_s"].size(0)
         priv_s = obs["priv_s"]
@@ -383,7 +383,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             cql_loss = (logsumexp - online_qa)
         else:
             cql_loss = torch.zeros(1, device=err.device)
-        return err, bc_loss, cql_loss, lstm_o, online_q
+        return err, bc_loss, cql_loss, lstm_o, online_q, mask
 
     def aux_task_iql(self, lstm_o, hand, seq_len, rl_loss_size, stat):
         seq_size, bsize, _ = hand.size()
@@ -416,7 +416,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         return agg_priority
 
     def loss(self, batch, aux_weight, stat, bc, cql):
-        err, bc_loss, cql_loss, lstm_o, online_q = self.td_error(
+        err, bc_loss, cql_loss, lstm_o, online_q, mask = self.td_error(
             batch.obs,
             batch.h0,
             batch.action,
@@ -448,7 +448,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         loss = rl_loss
 
         if aux_weight <= 0: 
-            return loss, bc_loss, cql_loss, priority, online_q, lstm_o
+            return loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask
 
         if self.vdn:
             pred1 = self.aux_task_vdn(
@@ -470,7 +470,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             )
             loss = rl_loss + aux_weight * pred
 
-        return loss, bc_loss, cql_loss, priority, online_q, lstm_o
+        return loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask
 
     def behavior_clone_loss(self, online_q, batch, t, clone_bot, stat):
         max_seq_len = batch.obs["priv_s"].size(0)

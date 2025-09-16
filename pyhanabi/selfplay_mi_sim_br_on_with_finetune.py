@@ -101,6 +101,7 @@ def parse_args():
     parser.add_argument(
         "--priority_exponent", type=float, default=0.9, help="alpha in p-replay"
     )
+    parser.add_argument("--agent_finetune", type=int, default=0)
 
     parser.add_argument(
         "--priority_weight", type=float, default=0.6, help="beta in p-replay"
@@ -286,6 +287,9 @@ if __name__ == "__main__":
         print(args.load_br_model)
         utils.load_weight(agent_br.online_net, args.load_br_model, args.train_device)
         print("*****done*****")
+    else:
+        print("*****no pretrained model*****")
+        
     
     agent_br = agent_br.to(args.train_device)
     optim = torch.optim.Adam(agent_br.online_net.parameters(), lr=args.lr, eps=args.eps)
@@ -365,34 +369,35 @@ if __name__ == "__main__":
             print(f"Initial eval score for pretrained model {i}: {score}, perfect: {perfect}")
             print("================")
             print(f"*****done*****\n\n")
-            replay_buffer_agents.append(rela.RNNPrioritizedReplay(
-                args.replay_buffer_size,
-                args.seed,
-                args.priority_exponent,
-                args.priority_weight,
-                args.prefetch,
-            ))
-            act_group_agents.append(ActGroup(
-                args.act_device,
-                coop_agents[i],
-                args.seed,
-                args.num_thread,
-                args.num_game_per_thread,
-                args.num_player,
-                explore_eps,
-                boltzmann_t,
-                args.method,
-                args.sad,
-                args.shuffle_color,
-                args.hide_action,
-                True,  # trinary, 3 bits for aux task
-                replay_buffer_agents[i],
-                args.multi_step,
-                args.max_len,
-                args.gamma,
-                args.off_belief,
-                None,
-            ))
+            if args.agent_finetune:
+                replay_buffer_agents.append(rela.RNNPrioritizedReplay(
+                    args.replay_buffer_size,
+                    args.seed,
+                    args.priority_exponent,
+                    args.priority_weight,
+                    args.prefetch,
+                ))
+                act_group_agents.append(ActGroup(
+                    args.act_device,
+                    coop_agents[i],
+                    args.seed,
+                    args.num_thread,
+                    args.num_game_per_thread,
+                    args.num_player,
+                    explore_eps,
+                    boltzmann_t,
+                    args.method,
+                    args.sad,
+                    args.shuffle_color,
+                    args.hide_action,
+                    True,  # trinary, 3 bits for aux task
+                    replay_buffer_agents[i],
+                    args.multi_step,
+                    args.max_len,
+                    args.gamma,
+                    args.off_belief,
+                    None,
+                ))
 
     belief_model = None
     
@@ -439,29 +444,30 @@ if __name__ == "__main__":
         time.sleep(1)
     print("warming up BR agent replay buffer:", replay_buffer.size(), "\n")
     
-    games_agents = []
-    context_agents = []
-    for i in range(len(args.load_model)):
-        games_agents.append(create_envs(
-        args.num_thread * args.num_game_per_thread,
-        args.seed,
-        args.num_player,
-        args.train_bomb,
-        args.max_len,
-        ))
-        context_agents.append(create_threads(
-            args.num_thread,
-            args.num_game_per_thread,
-            act_group_agents[i].actors,
-            games_agents[i],
-        ))
-        act_group_agents[i].start()
-        context_agents[i][0].start()
-        time.sleep(1)
-        while replay_buffer_agents[i].size() < args.burn_in_frames:
-            print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size())
+    if args.agent_finetune:
+        games_agents = []
+        context_agents = []
+        for i in range(len(args.load_model)):
+            games_agents.append(create_envs(
+            args.num_thread * args.num_game_per_thread,
+            args.seed,
+            args.num_player,
+            args.train_bomb,
+            args.max_len,
+            ))
+            context_agents.append(create_threads(
+                args.num_thread,
+                args.num_game_per_thread,
+                act_group_agents[i].actors,
+                games_agents[i],
+            ))
+            act_group_agents[i].start()
+            context_agents[i][0].start()
             time.sleep(1)
-        print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size(), "\n")    
+            while replay_buffer_agents[i].size() < args.burn_in_frames:
+                print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size())
+                time.sleep(1)
+            print(f"warming up agent {i} replay buffer:", replay_buffer_agents[i].size(), "\n")    
 
     print("Success, Done")
     print("=======================")
@@ -473,14 +479,15 @@ if __name__ == "__main__":
     stat = common_utils.MultiCounter(args.save_dir)
     tachometer = utils.Tachometer()
     stopwatch = common_utils.Stopwatch()
-    stat_agents = []
-    tachometer_agents = []
-    stopwatch_agents = []
-    for i in range(len(args.load_model)):
-        model_dir = os.path.dirname(args.load_model[i])
-        stat_agents.append(common_utils.MultiCounter(model_dir))
-        tachometer_agents.append(utils.Tachometer())
-        stopwatch_agents.append(common_utils.Stopwatch())
+    if args.agent_finetune:
+        stat_agents = []
+        tachometer_agents = []
+        stopwatch_agents = []
+        for i in range(len(args.load_model)):
+            model_dir = os.path.dirname(args.load_model[i])
+            stat_agents.append(common_utils.MultiCounter(model_dir))
+            tachometer_agents.append(utils.Tachometer())
+            stopwatch_agents.append(common_utils.Stopwatch())
 
     for epoch in range(args.num_epoch):
         print("beginning of epoch: ", epoch)
@@ -488,25 +495,29 @@ if __name__ == "__main__":
         tachometer.start()
         stat.reset()
         stopwatch.reset()
-        for i in range(len(args.load_model)):
-            stat_agents[i].reset()
-            tachometer_agents[i].start()
-            stopwatch_agents[i].reset()
+        if args.agent_finetune:
+            for i in range(len(args.load_model)):
+                stat_agents[i].reset()
+                tachometer_agents[i].start()
+                stopwatch_agents[i].reset()
 
         for batch_idx in tqdm(range(args.epoch_len), desc=f'Training', bar_format='{l_bar}{bar:20}{r_bar}', leave=True):
             num_update = batch_idx + epoch * args.epoch_len
             
             if num_update % args.num_update_between_sync == 0:
                 agent_br.sync_target_with_online()
-                for i in range(len(args.load_model)):
-                    coop_agents[i].sync_target_with_online()
-                print(f"\nSynced target with online for BR agent and {len(args.load_model)} coop agents")
+                print(f"\nSynced target with online for BR agent")
+                if args.agent_finetune:
+                    for i in range(len(args.load_model)):
+                        coop_agents[i].sync_target_with_online()
+                    print(f"\nSynced target with online for {len(args.load_model)} coop agents")
 
             if num_update % args.actor_sync_freq == 0:
                 act_group.update_model(agent_br)
-                act_group.update_coop_models(coop_agents)
-                for i in range(len(args.load_model)):
-                    act_group_agents[i].update_model(coop_agents[i])
+                if args.agent_finetune:
+                    act_group.update_coop_models(coop_agents)
+                    for i in range(len(args.load_model)):
+                        act_group_agents[i].update_model(coop_agents[i])
                 # print(f"Updated model for BR agent and {len(args.load_model)} coop agents")
             # if args.coop_sync_freq and num_update % args.coop_sync_freq == 0:
             #     print(f">>>step {num_update}, sync models")
@@ -554,31 +565,33 @@ if __name__ == "__main__":
             stat["grad_norm"].feed(g_norm)
             stat["boltzmann_t"].feed(batch.obs["temperature"][0].mean())
 
-            for i in range(len(args.load_model)):
-                batch, weight = replay_buffer_agents[i].sample(args.batchsize, args.train_device)
-                stopwatch_agents[i].time(f"sample data agent {i}")    
+            if args.agent_finetune:
+                for i in range(len(args.load_model)):
+                    print("LANJAAAAAAAAAA")
+                    batch, weight = replay_buffer_agents[i].sample(args.batchsize, args.train_device)
+                    stopwatch_agents[i].time(f"sample data agent {i}")    
 
-                loss, priority, online_q = coop_agents[i].loss(batch, args.aux_weight, stat_agents[i])
-                
-                loss = (loss * weight).mean()
-                loss.backward()
-                torch.cuda.synchronize()
-                stopwatch_agents[i].time(f"forward & backward agent {i}")
+                    loss, priority, online_q = coop_agents[i].loss(batch, args.aux_weight, stat_agents[i])
+                    
+                    loss = (loss * weight).mean()
+                    loss.backward()
+                    torch.cuda.synchronize()
+                    stopwatch_agents[i].time(f"forward & backward agent {i}")
 
-                g_norm = torch.nn.utils.clip_grad_norm_(
-                    coop_agents[i].online_net.parameters(), args.grad_clip
-                )
-                
-                optim_agents[i].step()
-                optim_agents[i].zero_grad()
-                torch.cuda.synchronize()
-                stopwatch_agents[i].time(f"update model agent {i}")
+                    g_norm = torch.nn.utils.clip_grad_norm_(
+                        coop_agents[i].online_net.parameters(), args.grad_clip
+                    )
+                    
+                    optim_agents[i].step()
+                    optim_agents[i].zero_grad()
+                    torch.cuda.synchronize()
+                    stopwatch_agents[i].time(f"update model agent {i}")
 
-                replay_buffer_agents[i].update_priority(priority)
-                stopwatch_agents[i].time(f"updating priority agent {i}")
-                stat_agents[i]["loss"].feed(loss.detach().item())
-                stat_agents[i]["grad_norm"].feed(g_norm)
-                stat_agents[i]["boltzmann_t"].feed(batch.obs["temperature"][0].mean())
+                    replay_buffer_agents[i].update_priority(priority)
+                    stopwatch_agents[i].time(f"updating priority agent {i}")
+                    stat_agents[i]["loss"].feed(loss.detach().item())
+                    stat_agents[i]["grad_norm"].feed(g_norm)
+                    stat_agents[i]["boltzmann_t"].feed(batch.obs["temperature"][0].mean())
 
         count_factor = args.num_player if args.method == "vdn" else 1
         print("EPOCH: %d" % epoch)
@@ -586,11 +599,12 @@ if __name__ == "__main__":
         tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, count_factor)
         stopwatch.summary()
         stat.summary(epoch)
-        for i in range(len(args.load_model)):
-            print(f"\n=====Agent {i}======")
-            tachometer_agents[i].lap(replay_buffer_agents[i], args.epoch_len * args.batchsize, count_factor)
-            stopwatch_agents[i].summary()
-            stat_agents[i].summary(epoch)
+        if args.agent_finetune:
+            for i in range(len(args.load_model)):
+                print(f"\n=====Agent {i}======")
+                tachometer_agents[i].lap(replay_buffer_agents[i], args.epoch_len * args.batchsize, count_factor)
+                stopwatch_agents[i].summary()
+                stat_agents[i].summary(epoch)
         
         # eval all agents
         for i in range(len(args.load_model)+1):
@@ -606,9 +620,11 @@ if __name__ == "__main__":
                     eval_agents = [eval_agent]
                     for idx in eval_idxs:
                         eval_agents.append(eval_coop_agents[idx])
-            else:
+            elif args.agent_finetune:
                 eval_coop_agents[i-1].load_state_dict(coop_agents[i-1].state_dict())
                 eval_agents = [eval_coop_agents[i-1] for _ in range(args.num_player)]
+            else:
+                continue
             score, perfect, *_ = evaluate(
                 eval_agents,
                 1000,
@@ -623,7 +639,7 @@ if __name__ == "__main__":
             if i==0:
                 print("\n=====Eval Scores=====")
                 print(f"BR agent eval score: {score}, perfect: {perfect}")
-            else:
+            elif args.agent_finetune:
                 print(f"Agent {i} eval score: {score}, perfect: {perfect}")
 
         # save model
@@ -636,10 +652,12 @@ if __name__ == "__main__":
                         None, agent_br.online_net.state_dict(), score, force_save_name=force_save_name
                     )
                     print(f"BR agent saved: {model_saved}")
-                else:
+                elif args.agent_finetune:
                     force_save_name = f"coop_agent_{i}_seed_{args.seed}_epoch_{epoch}"
                     model_saved = saver.save(
                         None, coop_agents[i-1].online_net.state_dict(), score, force_save_name=force_save_name
                     )
                     print(f"Agent {i} saved: {model_saved}")
+                else:
+                    continue
         print("==========\n")

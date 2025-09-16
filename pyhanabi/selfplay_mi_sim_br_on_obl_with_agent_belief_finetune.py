@@ -333,20 +333,20 @@ if __name__ == "__main__":
     #initial eval for BR agent
     score, perfect = evaluate_agent(agent_br, args)
     print("\n================")
-    print(f"Initial BR agent self-play eval score: {score}, perfect: {perfect}")
+    print(f"Initial BR agent self-play eval score: {score}, perfect: {100*perfect}%")
     print("================\n")
 
+    coop_agents = []
+    eval_coop_agents = []
     if args.finetune_coop_agents:
+        optim_agents = []
+        act_group_agents = []
+        replay_buffer_agents = []
         if args.finetune_coop_agents_belief:
             bool_trinary = False
         else:
             bool_trinary = True
         if args.load_model and args.load_model != "None":
-            coop_agents = []
-            optim_agents = []
-            eval_coop_agents = []
-            act_group_agents = []
-            replay_buffer_agents = []
             for i in range(len(args.load_model)):
                 coop_agents.append(r2d2.R2D2Agent(
                     (args.method == "vdn"),
@@ -383,7 +383,7 @@ if __name__ == "__main__":
                     device=args.train_device,
                 )
                 print("================")
-                print(f"Initial eval score for pretrained model {i}: {score}, perfect: {perfect}")
+                print(f"Initial eval score for pretrained model {i}: {score}, perfect: {100*perfect}%")
                 print("================")
                 print(f"*****done*****\n\n")
                 replay_buffer_agents.append(rela.RNNPrioritizedReplay(
@@ -427,11 +427,13 @@ if __name__ == "__main__":
                 print("*****done*****")    
             coop_agents = utils.load_coop_agents(coop_ckpts, device="cpu", vdn=(args.method == "vdn"), multi_step=args.coop_multi_step)
             for i, agent in enumerate(coop_agents):
+                eval_coop_agents.append(coop_agents[i].clone(args.train_device, {"vdn": False, "boltzmann_act": False}))
                 coop_eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
                 score, perfect = evaluate_agent(coop_eval_agent, args)
                 print("\n================")
-                print(f"Initial Coop Agent {i} self-play eval score: {score}, perfect: {perfect}")
+                print(f"Initial Coop Agent {i} self-play eval score: {score}, perfect: {100*perfect:.2f}%")
                 print("================\n")
+
 
     belief_model = None
     belief_model = []
@@ -442,9 +444,9 @@ if __name__ == "__main__":
         belief_model_files = sorted(belief_model_files)
         belief_devices = args.act_device.split(",")
         for i, belief_model_file in enumerate(belief_model_files):
-            belief_model_pth = os.path.join(args.belief_model, belief_model_file)
-            if "belief" not in belief_model_file:
-                continue
+            belief_model_pth = os.path.join(args.belief_model, belief_model_file, 'latest.pthw')
+            # if "belief" not in belief_model_file:
+            #     continue
             print(f"load belief model from belief model : {belief_model_pth} on device {args.train_device}")
             belief_config = utils.get_train_config(belief_model_pth)
             belief_model.append(

@@ -12,6 +12,183 @@ from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import logging
+import datetime
+import sys
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
+import gc
+from sklearn.metrics import silhouette_score
+from g_means_clustering import gmeans_clustering
+
+def setup_logging(log_dir):
+    """Set up comprehensive logging for training"""
+    # Create log directory if it doesn't exist
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    # Create timestamp for log file
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"training_log_{timestamp}.log")
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()  # Also print to console
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Training log started - Log file: {log_file}")
+    return logger, log_file
+
+def capture_and_log_output(logger, func, *args, **kwargs):
+    """Capture stdout/stderr from a function and log it"""
+    # Create string buffers to capture output
+    stdout_buffer = StringIO()
+    stderr_buffer = StringIO()
+    
+    # Redirect stdout and stderr to buffers
+    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        result = func(*args, **kwargs)
+    
+    # Get the captured output
+    stdout_output = stdout_buffer.getvalue()
+    stderr_output = stderr_buffer.getvalue()
+    
+    # Log the captured output
+    if stdout_output.strip():
+        logger.info("Dataset loading output:")
+        for line in stdout_output.strip().split('\n'):
+            if line.strip():
+                logger.info(f"  {line}")
+    
+    if stderr_output.strip():
+        logger.warning("Dataset loading warnings/errors:")
+        for line in stderr_output.strip().split('\n'):
+            if line.strip():
+                logger.warning(f"  {line}")
+    
+    return result
+
+def check_gpu_memory():
+    """Check available GPU memory and return percentage free"""
+    if torch.cuda.is_available():
+        total_memory = torch.cuda.get_device_properties(0).total_memory
+        allocated_memory = torch.cuda.memory_allocated(0)
+        free_memory = total_memory - allocated_memory
+        free_percentage = (free_memory / total_memory) * 100
+        return free_percentage
+    return 100.0
+
+class AsyncModelSaver:
+    """Handles asynchronous model saving, clustering, and plotting operations"""
+    def __init__(self, max_workers=2):
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.futures = []
+    
+    def submit_save_operations(self, save_cluster_path, model_save_path, best_encoder, best_decoder, train_dataset, args):
+        """Submit save operations to run asynchronously"""
+        print("Started asynchronous saving operations")
+        logging.info("Started asynchronous saving operations")
+        
+        # Save model state dicts (CPU tensors) - this is fast and can be done synchronously
+        torch.save({
+            "encoder": best_encoder.state_dict(), 
+            "decoder": best_decoder.state_dict()
+        }, model_save_path)
+        
+        # Submit clustering and plotting operations to run asynchronously
+        # Pass train_dataset instead of batch_loader to create new DataLoader instances
+        cluster_future = self.executor.submit(self._save_cluster_async, save_cluster_path, best_encoder, train_dataset, args)
+        plot_future = self.executor.submit(self._plot_tsne_async, train_dataset, save_cluster_path, model_save_path, args)
+        
+        self.futures.extend([cluster_future, plot_future])
+        return cluster_future, plot_future
+    
+    def _save_cluster_async(self, save_cluster_path, encoder, train_dataset, args):
+        """Async version of save_cluster"""
+        try:
+            # Set CUDA device for this thread
+            if torch.cuda.is_available():
+                torch.cuda.set_device(args.train_device)
+            
+            # Create a new DataLoader instance for this thread
+            train_loader = DataLoader(train_dataset)
+            batch_loader = torch.utils.data.DataLoader(
+                dataset=train_loader,
+                batch_size=min(args.batchsize, args.async_batch_size),  # Use smaller batch size for async operations
+                shuffle=False,  # No need to shuffle for clustering
+                num_workers=0,  # Use 0 workers to avoid multiprocessing issues
+                pin_memory=False
+            )
+            result = save_cluster(save_cluster_path, encoder, batch_loader, args)
+            print("Completed saving cluster")
+            logging.info("Completed saving cluster")
+            return result
+        except Exception as e:
+            print(f"Error in async clustering: {e}")
+            logging.error(f"Error in async clustering: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _plot_tsne_async(self, train_dataset, cluster_save_path, model_save_path, args):
+        """Async version of plot_tsne"""
+        try:
+            # Set CUDA device for this thread
+            if torch.cuda.is_available():
+                torch.cuda.set_device(args.train_device)
+            
+            # Create a new DataLoader instance for this thread
+            train_loader = DataLoader(train_dataset)
+            batch_loader = torch.utils.data.DataLoader(
+                dataset=train_loader,
+                batch_size=min(args.batchsize, args.async_batch_size),  # Use smaller batch size for async operations
+                shuffle=False,  # No need to shuffle for plotting
+                num_workers=0,  # Use 0 workers to avoid multiprocessing issues
+                pin_memory=False
+            )
+            plot_tsne(batch_loader, cluster_save_path, model_save_path, args)
+            print("Completed plotting")
+            logging.info("Completed plotting")
+            return True
+        except Exception as e:
+            print(f"Error in async plotting: {e}")
+            logging.error(f"Error in async plotting: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def cleanup_completed_futures(self):
+        """Clean up completed futures to prevent memory accumulation"""
+        completed_futures = []
+        for future in self.futures:
+            if future.done():
+                completed_futures.append(future)
+                # Check if the future completed with an error
+                try:
+                    future.result()  # This will raise an exception if the future failed
+                except Exception as e:
+                    print(f"Async operation failed: {e}")
+        
+        for future in completed_futures:
+            self.futures.remove(future)
+    
+    def get_status(self):
+        """Get status of async operations"""
+        completed = sum(1 for f in self.futures if f.done())
+        total = len(self.futures)
+        return f"Async operations: {completed}/{total} completed"
+    
+    def shutdown(self):
+        """Shutdown the executor"""
+        self.executor.shutdown(wait=True)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="train dqn on hanabi")
@@ -104,6 +281,10 @@ def parse_args():
     parser.add_argument("--bc", type=bool, default=False)
     parser.add_argument("--bc_weight", type=float, default=0.0)
     parser.add_argument("--decay_bc", type=int, default=0, help="Number of epochs to decay bc_weight from initial value to eps")
+    parser.add_argument("--reqd_con_eps", type=int, default=10, help="Number of epochs to wait for consecutive small gradient norms")
+    parser.add_argument("--beta", type=float, default=0.0, help="Beta (KL weight)")
+    parser.add_argument("--grad_norm_threshold", type=float, default=1e-5, help="Gradient norm threshold")
+    parser.add_argument("--async_batch_size", type=int, default=64, help="Batch size for async operations")
 
     #sp, cp, cp weights
     parser.add_argument("--cp", type=bool, default=False)
@@ -295,7 +476,7 @@ def encode_batch(batch, encoder):
     return z
 
 
-def train_mi(args, batch_loader, epochs, beta):
+def train_mi(args, batch_loader, train_dataset, epochs, beta):    
     # Training Loop
     encoder = TrajectoryEncoder(obs_dim=1213, action_dim=21, hidden_dim=512, latent_dim=512)
     decoder = Decoder(latent_dim=512, hidden_dim=512, obs_dim=1212, action_dim=21, reward_dim=1)
@@ -314,8 +495,16 @@ def train_mi(args, batch_loader, epochs, beta):
     # mse_loss = nn.MSELoss(reduction='mean')
 
     summary_writer = SummaryWriter(log_dir=args.clu_mod_dir)
+    
+    # Initialize async model saver
+    async_saver = AsyncModelSaver(max_workers=2)
 
     best_loss = float('inf')
+    
+    # Early stopping variables
+    consecutive_small_grad_epochs = 0
+    
+    logger.info("Starting training...")
 
     avg_loss = 0
     avg_action_loss = 0
@@ -413,9 +602,36 @@ def train_mi(args, batch_loader, epochs, beta):
             optimizer.zero_grad()
             loss.backward()
 
-            # grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=5.0)
-
+            # Calculate gradient norm
+            grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=5.0)
+            
+            # Gradient norm will be checked at the end of each epoch
             optimizer.step()
+            
+            # Clear intermediate tensors to free memory
+            del batch, loss, action_recon_loss, kl_loss, actions_pred
+            if 'z' in locals():
+                del z
+            if 'mu' in locals():
+                del mu
+            if 'sigma' in locals():
+                del sigma
+            if 'obs_rew' in locals():
+                del obs_rew
+            if 'obs' in locals():
+                del obs
+            if 'actions' in locals():
+                del actions
+            if 'mask' in locals():
+                del mask
+            
+            # Clear GPU cache every 10 batches to prevent memory accumulation
+            if batch_idx % 10 == 0:
+                torch.cuda.empty_cache()
+                # Check memory usage and log if low
+                free_mem = check_gpu_memory()
+                if free_mem < 10.0:  # Less than 10% free memory
+                    logger.warning(f"Low GPU memory: {free_mem:.1f}% free at epoch {epoch}, batch {batch_idx}")
 
             epoch_bar.set_postfix(
                 loss=avg_loss/(batch_idx + 1), 
@@ -423,7 +639,7 @@ def train_mi(args, batch_loader, epochs, beta):
                 # reward_loss=reward_recon_loss.item(),
                 # state_loss=state_recon_loss.item(),
                 kl_loss=avg_kl_loss/(batch_idx + 1), 
-                # grad_norm=grad_norm.item(),
+                grad_norm=grad_norm.item(),
                 lr=scheduler.get_last_lr()[0]
                 # mi_loss=mi_loss.item()
             )
@@ -431,23 +647,83 @@ def train_mi(args, batch_loader, epochs, beta):
         avg_action_loss = avg_action_loss / (batch_idx + 1)
         avg_kl_loss = avg_kl_loss / (batch_idx + 1)
         scheduler.step()
+        
+        # Clear GPU cache more frequently to prevent memory accumulation
+        if epoch % 5 == 0:  # Clear cache every 5 epochs
+            torch.cuda.empty_cache()
+            gc.collect()
 
         #add the average loss & learning rate to the tensorboard
         summary_writer.add_scalar('loss', avg_loss, epoch)
         summary_writer.add_scalar('action_loss', avg_action_loss, epoch)
         summary_writer.add_scalar('kl_loss', avg_kl_loss, epoch)
         summary_writer.add_scalar('lr', scheduler.get_last_lr()[0], epoch)
+        summary_writer.add_scalar('grad_norm', grad_norm.item(), epoch)
+        summary_writer.add_scalar('consecutive_small_grad_epochs', consecutive_small_grad_epochs, epoch)
+        
+        # Log epoch summary
+        logger.info(f"Epoch {epoch:4d} | Loss: {avg_loss:.6f} | Action Loss: {avg_action_loss:.6f} | KL Loss: {avg_kl_loss:.6f} | Grad Norm: {grad_norm:.2e} | LR: {scheduler.get_last_lr()[0]:.2e}")
+        
+        # Check for early stopping based on consecutive small gradient norms
+        if grad_norm < args.grad_norm_threshold:
+            consecutive_small_grad_epochs += 1
+            logger.warning(f"Epoch {epoch}: Small gradient norm ({grad_norm:.2e}) - consecutive count: {consecutive_small_grad_epochs}/{args.reqd_con_eps}")
+            
+            if consecutive_small_grad_epochs >= args.reqd_con_eps:
+                logger.info(f"Training stopped at epoch {epoch}: gradient norm < {args.grad_norm_threshold} for {args.reqd_con_eps} consecutive epochs")
+                # save the best encoder and decoder and plot the tsne
+                save_cluster_path = os.path.join(args.clu_mod_dir, f'best_cluster.pt')
+                model_save_path = os.path.join(args.clu_mod_dir, f'best_model.pt')
+                logger.info("Saving final model and generating t-SNE plot...")
+                plot_tsne(batch_loader, save_cluster_path, model_save_path, args)
+                logger.info("Training completed successfully with early stopping")
+                return encoder, None
+        else:
+            # Reset counter if gradient norm is not small
+            consecutive_small_grad_epochs = 0
 
         if avg_loss < best_loss:
             best_loss = avg_loss
             best_encoder = encoder
             best_decoder = decoder
+            logger.info(f"New best model at epoch {epoch} with loss: {best_loss:.6f}")
+            
         if epoch % 100 == 0:
-            save_cluster_path = os.path.join(args.clu_mod_dir, f'best_cluster.pt')
-            cluster_centers_tensor = save_cluster(save_cluster_path, best_encoder, batch_loader, args)
-            #save the encoder and decoder
-            torch.save({"encoder": best_encoder.state_dict(), "decoder": best_decoder.state_dict()}, os.path.join(args.clu_mod_dir, f'best_model.pt'))   
-    return encoder, cluster_centers_tensor
+            try:
+                save_cluster_path = os.path.join(args.clu_mod_dir, f'best_cluster.pt')
+                model_save_path = os.path.join(args.clu_mod_dir, f'best_model.pt')
+                
+                # Submit save operations to run asynchronously
+                cluster_future, plot_future = async_saver.submit_save_operations(
+                    save_cluster_path, model_save_path, best_encoder, best_decoder, train_dataset, args
+                )
+                
+                # Clean up any completed futures to prevent memory accumulation
+                async_saver.cleanup_completed_futures()
+                
+                logger.info(f"Epoch {epoch}: Submitted async save operations - {async_saver.get_status()}")
+                
+            except Exception as e:
+                logger.error(f"Error submitting async operations at epoch {epoch}: {e}")
+            
+            # Clear GPU cache after heavy operations
+            torch.cuda.empty_cache()
+            gc.collect()
+    # Wait for any remaining async operations to complete and cleanup
+    logger.info(f"Training completed. Final status: {async_saver.get_status()}")
+    async_saver.shutdown()
+    
+    logger.info("="*50)
+    logger.info("TRAINING SUMMARY")
+    logger.info("="*50)
+    logger.info(f"Final epoch: {epoch}")
+    logger.info(f"Best loss achieved: {best_loss:.6f}")
+    logger.info(f"Final gradient norm: {grad_norm:.2e}")
+    logger.info(f"Consecutive small grad epochs: {consecutive_small_grad_epochs}")
+    logger.info(f"Log file saved to: {log_file}")
+    logger.info("="*50)
+    
+    return encoder, None  # cluster_centers_tensor will be None since we're not waiting for it
 
 
 def save_cluster(save_cluster_path, encoder, batch_loader, args):
@@ -514,10 +790,65 @@ def load_cluster(cluster_save_path, model_save_path, args):
         print("Successfully loaded encoder")
         return encoder, cluster_centers_tensor
 
+# def adaptive_gmeans_clustering(batch_loader, encoder, args):
+#     all_lstm_o = []
+#     epoch_bar = tqdm(batch_loader, desc=f'Finding lstm_o', bar_format='{l_bar}{bar:20}{r_bar}', leave=True)
+#     with torch.no_grad():
+#         encoder.eval()
+#         for _, sample in enumerate(epoch_bar):
+#             batch, _ = process_batch(sample, args)
+#             z = encode_batch(batch, encoder)
+#             all_lstm_o.append(z)
+#     all_lstm_o = torch.cat(all_lstm_o, dim=0)
+#     lstm_o_np = all_lstm_o.cpu().numpy()
+#     n_samples = lstm_o_np.shape[0]
+#     lstm_o_reshaped = lstm_o_np.reshape(n_samples, -1)
+
+#     labels, k = gmeans_clustering(lstm_o_reshaped, seed=args.seed)
+#     print(f"G-means adaptive clustering found k={k}")
+#     return labels
+
+# write a function to perform adaptive kmeans clustering
+def adaptive_kmeans_clustering(batch_loader, encoder, args, min_k=2, max_k=10):
+    all_lstm_o = []
+    epoch_bar = tqdm(batch_loader, desc=f'Finding lstm_o', bar_format='{l_bar}{bar:20}{r_bar}', leave=True)
+    with torch.no_grad():
+        encoder.eval()
+        for _, sample in enumerate(epoch_bar):
+            batch, _ = process_batch(sample, args)
+            z = encode_batch(batch, encoder)
+            all_lstm_o.append(z)
+    all_lstm_o = torch.cat(all_lstm_o, dim=0)
+    lstm_o_np = all_lstm_o.cpu().numpy()
+    n_samples = lstm_o_np.shape[0]
+    lstm_o_reshaped = lstm_o_np.reshape(n_samples, -1)
+
+    best_k = None
+    best_score = -1
+    best_kmeans = None
+
+    epoch_bar = tqdm(range(min_k, min(max_k, n_samples) + 1), desc=f'Finding best k', bar_format='{l_bar}{bar:20}{r_bar}', leave=True)
+    for k in epoch_bar:  # cannot have more clusters than samples
+        kmeans = KMeans(n_clusters=k, random_state=args.seed, n_init=10)
+        cluster_labels = kmeans.fit_predict(lstm_o_reshaped)
+        
+        # silhouette score requires at least 2 clusters
+        if len(set(cluster_labels)) > 1:
+            score = silhouette_score(lstm_o_reshaped, cluster_labels)
+            if score > best_score:
+                best_score = score
+                best_k = k
+                best_kmeans = kmeans
+        
+        postfix = {'k': k, 'score': score}
+        epoch_bar.set_postfix(postfix)
+
+    print(f"Adaptive KMeans picked k={best_k} with silhouette score={best_score:.4f}")
+    return best_kmeans
+
 def plot_tsne(batch_loader, cluster_save_path, model_save_path, args):
     #extract all the folder names except the last one
-    folder_names = args.save_dir.split('/')[:-1]
-    folder_names = '/'.join(folder_names)
+    folder_names = args.clu_mod_dir
     plt_save_path = 'tsne_plot.png'  # Define plt_save_path before using it
     plt_save_path = os.path.join(folder_names, plt_save_path)
     encoder, _ = load_cluster(cluster_save_path, model_save_path, args)
@@ -533,9 +864,12 @@ def plot_tsne(batch_loader, cluster_save_path, model_save_path, args):
     lstm_o_np = all_lstm_o.cpu().numpy()
     n_samples = lstm_o_np.shape[0]
     lstm_o_reshaped = lstm_o_np.reshape(n_samples, -1)
+
     # Perform k-means clustering
-    kmeans = KMeans(n_clusters=args.num_agents, random_state=args.seed, n_init=10)
+    # kmeans = KMeans(n_clusters=args.num_agents, random_state=args.seed, n_init=10)
+    kmeans = adaptive_kmeans_clustering(batch_loader, encoder, args)
     cluster_labels = kmeans.fit_predict(lstm_o_reshaped)
+    # cluster_labels = adaptive_gmeans_clustering(batch_loader, encoder, args)
     
     #plot the tsne
     tsne = TSNE(n_components=2, random_state=args.seed)
@@ -550,11 +884,42 @@ if __name__ == "__main__":
     args = parse_args()
     if not os.path.exists(args.clu_mod_dir):
         os.makedirs(args.clu_mod_dir)
+    # Set up logging
+    logger, log_file = setup_logging(args.clu_mod_dir)
+    
+    # Log training configuration
+    logger.info("="*50)
+    logger.info("TRAINING CONFIGURATION")
+    logger.info("="*50)
+    logger.info(f"Device: {args.train_device}")
+    logger.info(f"Batch size: {args.batchsize}")
+    logger.info(f"Learning rate: 5e-4")
+    logger.info(f"Epochs: {args.num_epoch}")
+    logger.info(f"Beta (KL weight): {args.beta}")
+    logger.info(f"Required consecutive epochs for early stopping: {args.reqd_con_eps}")
+    logger.info(f"Gradient norm threshold: {args.grad_norm_threshold}")
+    logger.info(f"Number of agents: {args.num_agents}")
+    logger.info(f"Dataset path: {args.dataset_path}")
+    logger.info(f"Async batch size: {args.async_batch_size}")
+    logger.info("="*50)
+
     # Load your dataset
-    train_dataset = LoadDataset(args)
-    publ_s, priv_s, legal_move, h0, action, reward, bootstrap, terminal, seq_len = train_dataset.load()
-    reward = calc_actual_rewards(reward, args)
+    logger.info("Loading dataset...")   
+    
+    # Capture and log dataset loading output
+    def load_dataset_data():
+        train_dataset = LoadDataset(args)
+        return train_dataset.load()
+    
+    publ_s, priv_s, legal_move, h0, action, reward, bootstrap, terminal, seq_len = capture_and_log_output(logger, load_dataset_data)
+    
+    # Calculate actual rewards (this might also have output)
+    def calc_rewards():
+        return calc_actual_rewards(reward, args)
+    
+    reward = capture_and_log_output(logger, calc_rewards)
     train_dataset = (publ_s, priv_s, legal_move, h0, action, reward, bootstrap, terminal, seq_len)
+    logger.info("Dataset loaded successfully")
     train_loader = DataLoader(train_dataset)
     batch_loader = torch.utils.data.DataLoader(
         dataset=train_loader,
@@ -566,7 +931,7 @@ if __name__ == "__main__":
         prefetch_factor=args.prefetch
     )
     # Check if cluster information already exists
-    # train_mi(args, batch_loader, 1000, 0.0)
+    # train_mi(args, batch_loader, train_dataset, epochs=args.num_epoch, beta=args.beta)
     cluster_save_path = os.path.join(args.clu_mod_dir, 'best_cluster.pt')
     model_save_path = os.path.join(args.clu_mod_dir, 'best_model.pt')
     # encoder, cluster_centers_tensor = load_cluster(cluster_save_path, model_save_path, args)

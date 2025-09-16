@@ -18,6 +18,8 @@ from sklearn.cluster import KMeans
 import numpy as np
 import torch
 from torch import nn
+import concurrent.futures
+from functools import partial
 
 from act_group import ActGroup
 from create import create_envs, create_threads
@@ -31,7 +33,7 @@ from replay_load import PrioritizedReplayBuffer
 from replay_load import LoadDataset, DataLoader, process_batch
 from replay_load import ChunkedDataLoader
 from tqdm import tqdm
-from losses import train_br_agent, diversity_loss
+from losses import td_error_br, diversity_loss
 import gc   
 import common_utils
 import utils
@@ -94,6 +96,7 @@ def parse_args():
     parser.add_argument("--load_after", type=int, default=20)
     parser.add_argument("--burn_in_frames", type=int, default=10000)
     parser.add_argument("--replay_buffer_size", type=int, default=100000)
+    parser.add_argument("--data_sample", type=float, default=1.0)
 
     parser.add_argument(
         "--priority_exponent", type=float, default=0.9, help="alpha in p-replay"
@@ -131,6 +134,9 @@ def parse_args():
     parser.add_argument("--cp_bc_weight", type=float, default=0.0)
     parser.add_argument("--cp_bc_decay_factor", type=float, default=0.0)
     parser.add_argument("--cp_bc_decay_start", type=int, default=0, help="Number of epochs to decay bc_weight from initial value to eps")
+    parser.add_argument("--cql", type=bool, default=False)
+    parser.add_argument("--cql_weight", type=float, default=0.0)
+    parser.add_argument("--cp_cql_weight", type=float, default=0.0)
 
     #sp, cp, cp weights
     parser.add_argument("--cp", type=bool, default=False)
@@ -454,49 +460,121 @@ if __name__ == "__main__":
             # Store losses for each agent to combine later
             agent_losses = []
             agent_loss_weights = []
+            online_q_values = [None] * args.num_agents  # Initialize with None for each agent
             
-            # Run forward and backward passes for all agents in parallel
-            for i in range(args.num_agents):
-                # # Calculate distance-based weights for this agent
-                # agent_weights = compute_distance_weights(batch_lstm_o, i)
-
-                # # threshold the weights
-                # agent_weights = torch.where(agent_weights > args.wgt_thr, torch.ones_like(agent_weights), 0.00 * torch.ones_like(agent_weights))
-                # agent_loss_weights.append(agent_weights)
-
+            # Parallel processing function for each agent
+            def process_agent(i):
+                # Calculate kmeans-based weights for this agent
                 agent_weights = kmeans.predict(batch_lstm_o.cpu().numpy())
                 agent_weights = (agent_weights == i).astype(float)
                 agent_weights = torch.from_numpy(agent_weights).to(args.train_device)
-                agent_loss_weights.append(agent_weights)
-                loss, bc_loss, cql_loss, priority, _, _ = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
+                
+                # Calculate loss for this agent
+                loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
 
+                # Calculate Cross Play loss
+                err_cp, bc_loss_cp, cql_loss_cp = td_error_br(
+                    agents[i],
+                    agent_br,
+                    batch.obs,
+                    batch.h0,
+                    batch.action,
+                    batch.reward,
+                    batch.terminal,
+                    batch.bootstrap,
+                    batch.seq_len,
+                    args,
+                )
+
+                rl_loss_cp = nn.functional.smooth_l1_loss(
+                    err_cp, torch.zeros_like(err_cp), reduction="none"
+                )
+                rl_loss_cp = agent_weights * rl_loss_cp.sum(0)
+                bc_loss_cp = args.cp_bc_weight * bc_loss_cp.sum(0)
+                cql_loss_cp = args.cp_cql_weight * cql_loss_cp.sum(0)
+
+                # Process online_q values
+                max_len = online_q.shape[0]
+                batch_size = online_q.shape[1]//args.num_player
+                online_q = online_q.reshape(max_len, batch_size, args.num_player, -1)
+                online_q = online_q.sum(dim=-2)
+                
                 # Weight losses by distance-based weights
                 weighted_loss_sp = args.sp_weight * loss * agent_weights
                 weighted_loss_bc = args.bc_weight * bc_loss * agent_weights
                 weighted_loss_cql = args.cql_weight * cql_loss * agent_weights
-                agent_losses.append((weighted_loss_sp, weighted_loss_bc, weighted_loss_cql))
+
+                return {
+                    'agent_weights': agent_weights,
+                    'weighted_loss_sp': weighted_loss_sp,
+                    'weighted_loss_bc': weighted_loss_bc,
+                    'weighted_loss_cql': weighted_loss_cql,
+                    'online_q': online_q,
+                    'loss': loss,
+                    'bc_loss': bc_loss,
+                    'cql_loss': cql_loss,
+                    'rl_loss_cp': rl_loss_cp,
+                    'bc_loss_cp': bc_loss_cp,
+                    'cql_loss_cp': cql_loss_cp,
+                    'priority': priority,
+                    'lstm_o': lstm_o,
+                    'mask': mask
+                }
+            
+            # Run forward and backward passes for all agents in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.num_agents, 4)) as executor:
+                # Submit all agent processing tasks
+                future_to_agent = {executor.submit(process_agent, i): i for i in range(args.num_agents)}
+                
+                # Collect results as they complete
+                agent_results = [None] * args.num_agents
+                for future in concurrent.futures.as_completed(future_to_agent):
+                    agent_idx = future_to_agent[future]
+                    try:
+                        result = future.result()
+                        agent_results[agent_idx] = result
+                    except Exception as exc:
+                        print(f'Agent {agent_idx} generated an exception: {exc}')
+                        # Fallback to sequential processing for this agent
+                        agent_results[agent_idx] = process_agent(agent_idx)
+            
+            # Extract results from parallel processing
+            for i, result in enumerate(agent_results):
+                agent_loss_weights.append(result['agent_weights'])
+                online_q_values[i] = result['online_q']
+                agent_losses.append((
+                    result['weighted_loss_sp'],
+                    result['weighted_loss_bc'],
+                    result['weighted_loss_cql'],
+                    result['rl_loss_cp'],
+                    result['bc_loss_cp'],
+                    result['cql_loss_cp']
+                ))
                 
             # Aggregate all agent losses with their weights
             loss_sp = sum([loss_tuple[0] for loss_tuple in agent_losses])
             loss_bc = sum([loss_tuple[1] for loss_tuple in agent_losses])
             loss_cql = sum([loss_tuple[2] for loss_tuple in agent_losses])
 
-            # Apply the agent's loss calculation
-            loss_cp, online_q_values, valid_masks = train_br_agent(agent_br, agents, agent_loss_weights, batch, args)
-            
-            loss_cp = args.cp_weight * loss_cp
+            # Apply the agent's loss calculation (already parallelized)
+            loss_cp = sum([loss_tuple[3] for loss_tuple in agent_losses])
+            loss_cp_bc = agent_losses[0][4]
+            loss_cp_cql = agent_losses[0][5]
+            mask = agent_results[0]['mask']
+            loss_cp = loss_cp + loss_cp_bc + loss_cp_cql
 
             loss_div = torch.zeros(len(weight), device=args.train_device)
             if args.div and args.div_weight > 0:
                 # Calculate diversity loss separately for each agent, with that agent's Q-values having gradients
                 agent_div_losses = []
-                for i in range(args.num_agents):
-                    div_loss = diversity_loss(online_q_values, valid_masks, args, i)
-                    agent_div_losses.append(div_loss * agent_loss_weights[i])
+                div_loss = diversity_loss(online_q_values, mask, args)
+                agent_loss_weights = torch.stack(agent_loss_weights)
+                div_loss = agent_loss_weights * div_loss
+                div_loss = div_loss.mean(dim=-1)
                 
                 # Sum the diversity losses from all agents
-                loss_div = args.div_weight * sum(agent_div_losses)
-                
+                loss_div = args.div_weight * div_loss.sum()
+                                
             loss = loss_cp + loss_sp + loss_bc + loss_cql - loss_div
             
             # Weight by importance sampling weights and take mean
@@ -514,8 +592,11 @@ if __name__ == "__main__":
             torch.cuda.synchronize()
             stopwatch.time("forward & backward")
 
+            # g_norm = torch.nn.utils.clip_grad_norm_(
+                # agent_br.online_net.parameters(), args.grad_clip
+            # )
             g_norm = torch.nn.utils.clip_grad_norm_(
-                agent_br.online_net.parameters(), args.grad_clip
+                all_parameters, args.grad_clip
             )
             optim.step()
             optim.zero_grad()
@@ -527,9 +608,8 @@ if __name__ == "__main__":
 
             del batch, weight
             if batch_idx % 100 == 0:
-                if torch.cuda.memory_allocated(args.train_device) > 0.9 * torch.cuda.get_device_properties(args.train_device).total_memory:
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                torch.cuda.empty_cache()
+                gc.collect()
         count_factor = args.num_player if args.method == "vdn" else 1
         print("EPOCH: %d" % epoch)
         # tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, count_factor)
