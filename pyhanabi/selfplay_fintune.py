@@ -375,7 +375,7 @@ if __name__ == "__main__":
         force_save_name = None
         if epoch > 0 and epoch % args.save_model_after == 0:
             #save the model with the name of the load model
-            force_save_name = args.load_model.split("/")[-1].split(".")[0]
+            force_save_name = f"model_seed_{args.seed}_epoch_{epoch}"
         model_saved = saver.save(
             None, agent.online_net.state_dict(), score, force_save_name=force_save_name
         )
