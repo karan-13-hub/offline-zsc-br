@@ -6,8 +6,8 @@
 #
 #!/bin/bash
 python selfplay_mi_sim_br_hansel.py \
-       --save_dir /home/zaboreno/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7/coop_agents_sp_1.0_bc_0.4_div_0.05\
-       --clu_mod_dir /home/zaboreno/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7\
+       --save_dir /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/coop_agents_sp_1.0_bc_0.4_div_0.05\
+       --clu_mod_dir /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337\
        --num_thread 80 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -50,7 +50,7 @@ python selfplay_mi_sim_br_hansel.py \
        --sp_weight 1.0\
        --act_device cuda:3,cuda:2 \
        --train_device cuda:3 \
-       --dataset_path /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-1337/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-31415/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-271828/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-380843/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-7777777/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-1e9+7/data_2560\
+       --dataset_path /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-9/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-42/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-111/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-777/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-1234/data_2560 /home/zaboreno/hanabi_3p/data/np3_vdn_offline_data_seed-31337/data_2560\
        --data_sample 0.75\
        --wgt_thr 0.25\
        # --load_coop_model /home/zaboreno/hanabi_2p/exps/br_medium_data_seed_9_42_111_777_1234_31337/vdn_cp_bc_0.4_wo_div_coop/\
