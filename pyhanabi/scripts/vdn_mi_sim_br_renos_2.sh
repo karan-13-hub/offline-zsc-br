@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 #
 #!/bin/bash
-python selfplay_mi_sim_br.py \
+python selfplay_mi_sim_br_hansel.py \
        --save_dir /data/kmirakho/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7/coop_agents_sp_1.0_bc_0.4_div_0.05\
        --clu_mod_dir /data/kmirakho/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7\
        --num_thread 80 \
