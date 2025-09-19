@@ -27,7 +27,7 @@ from eval import evaluate
 import common_utils
 import rela
 import r2d2_br
-import utils
+import utils_sim_br
 from process_data import save_replay_buffer
 from replay_load import PrioritizedReplayBuffer
 from replay_load import LoadDataset, DataLoader, process_batch
@@ -126,7 +126,7 @@ def parse_args():
     parser.add_argument("--num_eval_after", type=int, default=100)
     parser.add_argument("--save_model_after", type=int, default=100)
     parser.add_argument("--actor_sync_freq", type=int, default=10)
-    parser.add_argument("--dataset_path", type=str, default="/data/kmirakho/offline-model/dataset_rl_1040640_sml.npz")
+    parser.add_argument("--dataset_path", nargs='*', default=None)
 
     #behaviour policy
     parser.add_argument("--bc", type=bool, default=False)
@@ -151,6 +151,10 @@ def parse_args():
     parser.add_argument("--start_div", type=int, default=0, help="Epoch to start using div_weight (before this, div_weight is 0)")
 
     #loading trained diverse agents
+    parser.add_argument("--br_train", type=bool, default=False)
+    parser.add_argument("--coop_train", type=bool, default=False)
+    parser.add_argument("--load_br_model", type=str, default="")
+    parser.add_argument("--load_coop_model", type=str, default="")
     parser.add_argument("--include", type=str, nargs="+", default=None)
     parser.add_argument("--exclude", type=str, nargs="+", default=None)
 
@@ -187,7 +191,7 @@ def load_models(models):
     overwrite = {}
     overwrite["device"] = args.train_device
     for model in models:
-        agent, _ = utils.load_agent(model, overwrite)
+        agent, _ = utils_sim_br.load_agent(model, overwrite)
         agents.append(agent)
     return agents
  
@@ -222,6 +226,7 @@ def cluster_data(batch_loader, encoder, args):
 if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
     args = parse_args()
+    import pdb; pdb.set_trace()
 
     # models = common_utils.get_all_files(args.models_dir, ".pthw")
     # if args.include is not None:
@@ -251,7 +256,7 @@ if __name__ == "__main__":
         args.replay_buffer_size //= args.num_player
         args.burn_in_frames //= args.num_player
 
-    explore_eps = utils.generate_explore_eps(
+    explore_eps = utils_sim_br.generate_explore_eps(
         args.act_base_eps, args.act_eps_alpha, args.num_t
     )
     
@@ -260,7 +265,7 @@ if __name__ == "__main__":
     print("avg explore eps:", np.mean(explore_eps))
 
     if args.boltzmann_act:
-        boltzmann_beta = utils.generate_log_uniform(
+        boltzmann_beta = utils_sim_br.generate_log_uniform(
             1 / args.max_t, 1 / args.min_t, args.num_t
         )
         boltzmann_t = [1 / b for b in boltzmann_beta]
@@ -278,57 +283,114 @@ if __name__ == "__main__":
         args.max_len,
     )
 
-    agent_br = r2d2_br.R2D2Agent(
-        (args.method == "vdn"),
-        args.multi_step,
-        args.gamma,
-        args.eta,
-        args.train_device,
-        games[0].feature_size(args.sad),
-        args.rnn_hid_dim,
-        games[0].num_action(),
-        args.net,
-        args.num_lstm_layer,
-        args.boltzmann_act,
-        False,  # uniform priority
-        args.off_belief,
-        )
-
-    agent_br.sync_target_with_online()
-    # optim_br = torch.optim.Adam(agent_br.online_net.parameters(), lr=args.lr, eps=args.eps)
-
-    print('Best Response agent: ', agent_br)
-
-    agents = []
-    for i in range(args.num_agents):
-        agents.append(
-            r2d2_br.R2D2Agent(
-                (args.method == "vdn"),
-                args.multi_step,
-                args.gamma,
-                args.eta,
-                args.train_device,
-                games[0].feature_size(args.sad),
-                args.rnn_hid_dim,
-                games[0].num_action(),
-                args.net,
-                args.num_lstm_layer,
-                args.boltzmann_act,
-                False,  # uniform priority
-                args.off_belief,
+    if args.br_train:
+        agent_br = r2d2_br.R2D2Agent(
+            (args.method == "vdn"),
+            args.multi_step,
+            args.gamma,
+            args.eta,
+            args.train_device,
+            games[0].feature_size(args.sad),
+            args.rnn_hid_dim,
+            games[0].num_action(),
+            args.net,
+            args.num_lstm_layer,
+            args.boltzmann_act,
+            False,  # uniform priority
+            args.off_belief,
             )
-        )
-        agents[i].sync_target_with_online()
-        agents[i] = agents[i].to(args.train_device)
+
+        agent_br.sync_target_with_online()
+        # optim_br = torch.optim.Adam(agent_br.online_net.parameters(), lr=args.lr, eps=args.eps)
+
+        print('Best Response agent: ', agent_br)
+        if args.load_br_model and args.load_br_model != "None":
+            print("*****loading pretrained BR agent model*****")
+            print(args.load_br_model)
+            utils_sim_br.load_weight(agent_br.online_net, args.load_br_model, args.train_device)
+            print("*****done*****")
+
+            eval_agent = agent_br.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+            eval_agent.load_state_dict(agent_br.state_dict())
+            score, perfect, *_ = evaluate(
+                [eval_agent for _ in range(args.num_player)],
+                1000,
+                args.seed,
+                args.eval_bomb,
+                0,  # explore eps
+                args.sad,
+                args.hide_action,
+                device=args.train_device
+            )
+            print(f"BR Agent eval score: {score:.4f}, perfect: {perfect * 100:.2f}%")
+    agents = []
+    if args.load_coop_model and args.load_coop_model != "None":
+        print("*****loading pretrained coop agent model*****")
+        print(args.load_coop_model)
+        models = common_utils.get_all_files(args.load_coop_model, ".pthw")
+        if args.include is not None:
+            models = filter_include(models, args.include)
+        if args.exclude is not None:
+            models = filter_exclude(models, args.exclude)
+
+        models.sort()       
+        pprint.pprint(models)
+
+        agents = load_models(models)
+        for i, agent in enumerate(agents):
+            #evaluate the agent
+            eval_agent = agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+            eval_agent.load_state_dict(agent.state_dict())
+            score, perfect, *_ = evaluate(
+                [eval_agent for _ in range(args.num_player)],
+                1000,
+                args.seed,
+                args.eval_bomb,
+                0,  # explore eps
+                args.sad,
+                args.hide_action,
+                device=args.train_device
+            )
+            print(f"Agent {i} eval score: {score:.4f}, perfect: {perfect * 100:.2f}%")
+            agent.to(args.train_device)
+            agent.sync_target_with_online()
+        print("*****done*****")
+    else:
+        for i in range(args.num_agents):
+            agents.append(
+                r2d2_br.R2D2Agent(
+                    (args.method == "vdn"),
+                    args.multi_step,
+                    args.gamma,
+                    args.eta,
+                    args.train_device,
+                    games[0].feature_size(args.sad),
+                    args.rnn_hid_dim,
+                    games[0].num_action(),
+                    args.net,
+                    args.num_lstm_layer,
+                    args.boltzmann_act,
+                    False,  # uniform priority
+                    args.off_belief,
+                )
+            )
+            agents[i].sync_target_with_online()
+            agents[i] = agents[i].to(args.train_device)
     
     # Create a single optimizer for all agents
     all_parameters = []
-    all_parameters.extend(list(agent_br.online_net.parameters()))
-    for agent in agents:
-        all_parameters.extend(list(agent.online_net.parameters()))
+    if args.br_train:
+        all_parameters.extend(list(agent_br.online_net.parameters()))
+    
+    if args.coop_train:
+        for agent in agents:
+            all_parameters.extend(list(agent.online_net.parameters()))
     optim = torch.optim.Adam(all_parameters, lr=args.lr, eps=args.eps)
 
-    eval_agent = agent_br.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+    if args.br_train:
+        eval_agent = agent_br.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+    if args.coop_train:
+        eval_agent = agents[0].clone(args.train_device, {"vdn": False, "boltzmann_act": False})
     
     # print("Loading dataset...")
     train_dataset = LoadDataset(args)
@@ -353,7 +415,8 @@ if __name__ == "__main__":
     frame_stat["num_buffer"] = 0
 
     stat = common_utils.MultiCounter(args.save_dir)
-    tachometer = utils.Tachometer()
+    
+    tachometer = utils_sim_br.Tachometer()
     stopwatch = common_utils.Stopwatch()
     
     # Store the original div_weight value
@@ -439,9 +502,11 @@ if __name__ == "__main__":
             num_update = batch_idx + epoch * args.epoch_len
             if num_update % args.num_update_between_sync == 0:
                 print("\nUpdated the target with online\n")
-                agent_br.sync_target_with_online()
-                for i in range(args.num_agents):
-                    agents[i].sync_target_with_online()
+                if args.br_train:
+                    agent_br.sync_target_with_online()
+                if args.coop_train:
+                    for i in range(args.num_agents):
+                        agents[i].sync_target_with_online()
 
             torch.cuda.synchronize()
             stopwatch.time("sync and updating")
@@ -464,45 +529,60 @@ if __name__ == "__main__":
             
             # Parallel processing function for each agent
             def process_agent(i):
+                weighted_loss_sp = torch.zeros(len(weight), device=args.train_device)
+                weighted_loss_bc = torch.zeros(len(weight), device=args.train_device)
+                weighted_loss_cql = torch.zeros(len(weight), device=args.train_device)
+                loss = torch.zeros(len(weight), device=args.train_device)
+                bc_loss = torch.zeros(len(weight), device=args.train_device)
+                cql_loss = torch.zeros(len(weight), device=args.train_device)
+                priority = torch.zeros(len(weight), device=args.train_device)
+                rl_loss_cp = torch.zeros(len(weight), device=args.train_device)
+                bc_loss_cp = torch.zeros(len(weight), device=args.train_device)
+                cql_loss_cp = torch.zeros(len(weight), device=args.train_device)
+                online_q = torch.zeros(len(weight), device=args.train_device)
+                lstm_o = torch.zeros(len(weight), device=args.train_device)
+                mask = torch.zeros(len(weight), device=args.train_device)
+
                 # Calculate kmeans-based weights for this agent
                 agent_weights = kmeans.predict(batch_lstm_o.cpu().numpy())
                 agent_weights = (agent_weights == i).astype(float)
                 agent_weights = torch.from_numpy(agent_weights).to(args.train_device)
+                if args.coop_train:
+                    # Calculate loss for this agent
+                    loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
                 
-                # Calculate loss for this agent
-                loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
+                    # Process online_q values
+                    max_len = online_q.shape[0]
+                    batch_size = online_q.shape[1]//args.num_player
+                    online_q = online_q.reshape(max_len, batch_size, args.num_player, -1)
+                    online_q = online_q.sum(dim=-2)
 
-                # Calculate Cross Play loss
-                err_cp, bc_loss_cp, cql_loss_cp = td_error_br(
-                    agents[i],
-                    agent_br,
-                    batch.obs,
-                    batch.h0,
-                    batch.action,
-                    batch.reward,
-                    batch.terminal,
-                    batch.bootstrap,
-                    batch.seq_len,
-                    args,
-                )
+                    # Weight losses by distance-based weights
+                    weighted_loss_sp = args.sp_weight * loss * agent_weights
+                    weighted_loss_bc = args.bc_weight * bc_loss * agent_weights
+                    weighted_loss_cql = args.cql_weight * cql_loss * agent_weights
 
-                rl_loss_cp = nn.functional.smooth_l1_loss(
-                    err_cp, torch.zeros_like(err_cp), reduction="none"
-                )
-                rl_loss_cp = agent_weights * rl_loss_cp.sum(0)
-                bc_loss_cp = args.cp_bc_weight * bc_loss_cp.sum(0)
-                cql_loss_cp = args.cp_cql_weight * cql_loss_cp.sum(0)
+                if args.br_train:
+                    # Calculate Cross Play loss
+                    err_cp, bc_loss_cp, cql_loss_cp = td_error_br(
+                        agents[i],
+                        agent_br,
+                        batch.obs,
+                        batch.h0,
+                        batch.action,
+                        batch.reward,
+                        batch.terminal,
+                        batch.bootstrap,
+                        batch.seq_len,
+                        args,
+                    )
 
-                # Process online_q values
-                max_len = online_q.shape[0]
-                batch_size = online_q.shape[1]//args.num_player
-                online_q = online_q.reshape(max_len, batch_size, args.num_player, -1)
-                online_q = online_q.sum(dim=-2)
-                
-                # Weight losses by distance-based weights
-                weighted_loss_sp = args.sp_weight * loss * agent_weights
-                weighted_loss_bc = args.bc_weight * bc_loss * agent_weights
-                weighted_loss_cql = args.cql_weight * cql_loss * agent_weights
+                    rl_loss_cp = nn.functional.smooth_l1_loss(
+                        err_cp, torch.zeros_like(err_cp), reduction="none"
+                    )
+                    rl_loss_cp = agent_weights * rl_loss_cp.sum(0)
+                    bc_loss_cp = args.cp_bc_weight * bc_loss_cp.sum(0)
+                    cql_loss_cp = args.cp_cql_weight * cql_loss_cp.sum(0)
 
                 return {
                     'agent_weights': agent_weights,
@@ -557,23 +637,24 @@ if __name__ == "__main__":
             loss_cql = sum([loss_tuple[2] for loss_tuple in agent_losses])
 
             # Apply the agent's loss calculation (already parallelized)
-            loss_cp = sum([loss_tuple[3] for loss_tuple in agent_losses])
+            loss_cp_rl = sum([loss_tuple[3] for loss_tuple in agent_losses])
             loss_cp_bc = agent_losses[0][4]
             loss_cp_cql = agent_losses[0][5]
             mask = agent_results[0]['mask']
-            loss_cp = loss_cp + loss_cp_bc + loss_cp_cql
+            loss_cp = loss_cp_rl + loss_cp_bc + loss_cp_cql
 
             loss_div = torch.zeros(len(weight), device=args.train_device)
-            if args.div and args.div_weight > 0:
-                # Calculate diversity loss separately for each agent, with that agent's Q-values having gradients
-                agent_div_losses = []
-                div_loss = diversity_loss(online_q_values, mask, args)
-                agent_loss_weights = torch.stack(agent_loss_weights)
-                div_loss = agent_loss_weights * div_loss
-                div_loss = div_loss.mean(dim=-1)
-                
-                # Sum the diversity losses from all agents
-                loss_div = args.div_weight * div_loss.sum()
+            if args.coop_train:
+                if args.div and args.div_weight > 0:
+                    # Calculate diversity loss separately for each agent, with that agent's Q-values having gradients
+                    agent_div_losses = []
+                    div_loss = diversity_loss(online_q_values, mask, args)
+                    agent_loss_weights = torch.stack(agent_loss_weights)
+                    div_loss = agent_loss_weights * div_loss
+                    div_loss = div_loss.mean(dim=-1)
+                    
+                    # Sum the diversity losses from all agents
+                    loss_div = args.div_weight * div_loss.sum()
                                 
             loss = loss_cp + loss_sp + loss_bc + loss_cql - loss_div
             
@@ -582,11 +663,13 @@ if __name__ == "__main__":
             loss.backward()
             
             # Stats tracking
-            stat["Self-play loss"].feed(loss_sp.mean().detach().item())
-            stat["Cross-play loss"].feed(loss_cp.mean().detach().item())
-            stat["Behavior Cloning loss"].feed(loss_bc.mean().detach().item())
-            stat["CQL loss"].feed(loss_cql.mean().detach().item())
-            stat["Diversity loss"].feed(loss_div.mean().detach().item())
+            stat["Coop-agents Self-play loss"].feed(loss_sp.mean().detach().item())
+            stat["Coop-agents Behavior Cloning loss"].feed(loss_bc.mean().detach().item())
+            stat["Coop-agents CQL loss"].feed(loss_cql.mean().detach().item())
+            stat["Coop-agents Diversity loss"].feed(loss_div.mean().detach().item())
+            stat["BR-agent Cross-play loss"].feed(loss_cp_rl.mean().detach().item())
+            stat["BR-agent Behavior Cloning loss"].feed(loss_cp_bc.mean().detach().item())
+            stat["BR-agent CQL loss"].feed(loss_cp_cql.mean().detach().item())
             stat["loss"].feed(loss.detach().item())
 
             torch.cuda.synchronize()
@@ -619,30 +702,12 @@ if __name__ == "__main__":
         if epoch % args.num_eval_after == 0:
             eval_seed = (9917 + epoch * 999999) % 7777777
 
-            #Evaluate the ensemble agent
-            eval_agent = eval_agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
-            eval_agent.load_state_dict(agent_br.state_dict())
-
-            score_br, perfect_br, *_ = evaluate(
-                [eval_agent for _ in range(args.num_player)],
-                1000,
-                eval_seed,
-                args.eval_bomb,
-                0,  # explore eps
-                args.sad,
-                args.hide_action,
-                device=args.train_device
-            )
-            
-            print(f"BR Agent eval score: {score_br:.4f}, perfect: {perfect_br * 100:.2f}%")
-
-            # evaluate the agents
-            scores = []
-            perfects = []
-            for i in range(args.num_agents):
+            if args.br_train:
+                #Evaluate the ensemble agent
                 eval_agent = eval_agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
-                eval_agent.load_state_dict(agents[i].state_dict())
-                score, perfect, *_ = evaluate(
+                eval_agent.load_state_dict(agent_br.state_dict())
+
+                score_br, perfect_br, *_ = evaluate(
                     [eval_agent for _ in range(args.num_player)],
                     1000,
                     eval_seed,
@@ -650,28 +715,51 @@ if __name__ == "__main__":
                     0,  # explore eps
                     args.sad,
                     args.hide_action,
-                    device=args.train_device    
+                    device=args.train_device
                 )
-                print(f"Agent {i} eval score: {score:.4f}, perfect: {perfect * 100:.2f}%")
-                scores.append(score)
-                perfects.append(perfect)
+                
+                print(f"BR Agent eval score: {score_br:.4f}, perfect: {perfect_br * 100:.2f}%")
+
+            if args.coop_train:
+                # evaluate the agents
+                scores = []
+                perfects = []
+                for i in range(args.num_agents):
+                    eval_agent = eval_agent.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
+                    eval_agent.load_state_dict(agents[i].state_dict())
+                    score, perfect, *_ = evaluate(
+                        [eval_agent for _ in range(args.num_player)],
+                        1000,
+                        eval_seed,
+                        args.eval_bomb,
+                        0,  # explore eps
+                        args.sad,
+                        args.hide_action,
+                        device=args.train_device    
+                    )
+                    print(f"Agent {i} eval score: {score:.4f}, perfect: {perfect * 100:.2f}%")
+                    scores.append(score)
+                    perfects.append(perfect)
             
         force_save_name = None
         if epoch % args.save_model_after == 0:
-            #save the model
-            agent_force_save_name = f"model_seed_{args.seed}_agent_br_epoch_{epoch}"
-            agent_model_saved = saver.save(
-                None, agent_br.online_net.state_dict(), score_br, force_save_name=agent_force_save_name
-            )
-            print(f"epoch {epoch}, agent br eval score: {score_br:.4f}, perfect: {perfect_br * 100:.2f}%, model saved: {agent_model_saved}")
-            
-            # Save models for each agent individually
-            for i in range(args.num_agents):
-                agent_force_save_name = f"model_seed_{args.seed}_agent_{i}_epoch_{epoch}"
+
+            if args.br_train:
+                #save the model
+                agent_force_save_name = f"model_seed_{args.seed}_agent_br_epoch_{epoch}"
                 agent_model_saved = saver.save(
-                    None, agents[i].online_net.state_dict(), scores[i], force_save_name=agent_force_save_name
+                    None, agent_br.online_net.state_dict(), score_br, force_save_name=agent_force_save_name
                 )
-                print(
-                    f"epoch {epoch}, agent {i} eval score: {scores[i]:.4f}, perfect: {perfects[i] * 100:.2f}%, model saved: {agent_model_saved}"
-                ) 
+                print(f"epoch {epoch}, agent br eval score: {score_br:.4f}, perfect: {perfect_br * 100:.2f}%, model saved: {agent_model_saved}")
+            
+            if args.coop_train:
+                # Save models for each agent individually
+                for i in range(args.num_agents):
+                    agent_force_save_name = f"model_seed_{args.seed}_agent_{i}_epoch_{epoch}"
+                    agent_model_saved = saver.save(
+                        None, agents[i].online_net.state_dict(), scores[i], force_save_name=agent_force_save_name
+                    )
+                    print(
+                        f"epoch {epoch}, agent {i} eval score: {scores[i]:.4f}, perfect: {perfects[i] * 100:.2f}%, model saved: {agent_model_saved}"
+                    ) 
         print("==========")

@@ -6,8 +6,8 @@
 #
 #!/bin/bash
 python selfplay_mi_sim_br.py \
-       --save_dir /data/kmirakho/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/coop_agents_sp_1.0_bc_0.4_div_0.05\
-       --clu_mod_dir /data/kmirakho/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337\
+       --save_dir /data/kmirakho/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7/coop_agents_sp_1.0_bc_0.4_div_0.05\
+       --clu_mod_dir /data/kmirakho/hanabi_3p/exps/br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7\
        --num_thread 80 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -20,7 +20,7 @@ python selfplay_mi_sim_br.py \
        --eps 1.5e-05 \
        --grad_clip 5 \
        --gamma 0.999 \
-       --seed 9 \
+       --seed 1337 \
        --batchsize 512 \
        --burn_in_frames 10000 \
        --replay_buffer_size 131072 \
@@ -48,9 +48,9 @@ python selfplay_mi_sim_br.py \
        --bc_weight 0.4\
        --coop_train True\
        --sp_weight 1.0\
-       --act_device cuda:3,cuda:2 \
-       --train_device cuda:3 \
-       --dataset_path /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-9/data_2560 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-42/data_2560 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-1234/data_2560 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-31337/data_2560 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-111/data_2560 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-777/data_2560\
+       --act_device cuda:0,cuda:2 \
+       --train_device cuda:1 \
+       --dataset_path /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-1337/data_80 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-31415/data_80 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-271828/data_80 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-380843/data_80 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-7777777/data_80 /data/kmirakho/hanabi_3p/data/np3_vdn_offline_data_seed-1e9+7/data_80\
        --data_sample 0.75\
        --wgt_thr 0.25\
        # --load_coop_model /data/kmirakho/hanabi_2p/exps/br_medium_data_seed_9_42_111_777_1234_31337/vdn_cp_bc_0.4_wo_div_coop/\

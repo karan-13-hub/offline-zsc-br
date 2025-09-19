@@ -427,19 +427,19 @@ class LoadDataset:
         # folders = ['/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_9/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_42/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1234/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_31337/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_111/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_777/data_80']
         
         # br_medium_data_seed_1337_31415_271828_380843_7777777_1e9+7
-        folders = ['/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1337/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_31415/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_271828/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_380843/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_7777777/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1e9+7/data_80']
+        # folders = ['/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1337/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_31415/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_271828/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_380843/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_7777777/data_80', '/data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1e9+7/data_80']
         
         # folders = ['/data/kmirakho/vdn-offline-data-seed-31337/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed9/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-42/data_80']
         # folders = ['/data/kmirakho/vdn-offline-data-seed-1e9+7/data_80'] 
 
-
+        folders = self.args.dataset_path
         filenames = []
         for folder in folders:
             print(f"Loading dataset from {folder}")
             #randomly select 50% of the files from each folder
-            files = glob(os.path.join(self.data_path, folder, '*.npz'))
+            files = glob(os.path.join(folder, '*.npz'))
             files = random.sample(files, int(len(files) * self.args.data_sample))
             filenames.extend(files)
             # filenames.extend(glob(os.path.join(self.data_path, folder, '*.npz')))
