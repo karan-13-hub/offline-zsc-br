@@ -226,8 +226,6 @@ def cluster_data(batch_loader, encoder, args):
 if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
     args = parse_args()
-    import pdb; pdb.set_trace()
-
     # models = common_utils.get_all_files(args.models_dir, ".pthw")
     # if args.include is not None:
     #     models = filter_include(models, args.include)
