@@ -48,32 +48,74 @@ def setup_logging(log_dir):
     return logger, log_file
 
 def capture_and_log_output(logger, func, *args, **kwargs):
-    """Capture stdout/stderr from a function and log it"""
-    # Create string buffers to capture output
+    """Capture stdout/stderr from a function and log it.
+    
+    - Handles tqdm-style carriage returns by normalizing to newlines.
+    - Optionally streams output in real time if stream=True.
+    - Accepts optional label to prefix the sections.
+    """
+    label = kwargs.pop("label", "Captured output")
+    stream = kwargs.pop("stream", False)
+
+    class _LoggerIO:
+        def __init__(self, logger, level_fn):
+            self.logger = logger
+            self.level_fn = level_fn
+            self._buffer = ""
+
+        def write(self, s):
+            if not s:
+                return
+            self._buffer += s
+            # Normalize carriage returns to newlines for tqdm-style updates
+            self._buffer = self._buffer.replace('\r', '\n')
+            while '\n' in self._buffer:
+                line, self._buffer = self._buffer.split('\n', 1)
+                if line.strip():
+                    self.level_fn(line)
+
+        def flush(self):
+            if self._buffer.strip():
+                # Flush any remaining partial line
+                self.level_fn(self._buffer.strip())
+                self._buffer = ""
+
+    if stream:
+        # Stream logs live to logger
+        out = _LoggerIO(logger, logger.info)
+        err = _LoggerIO(logger, logger.warning)
+        with redirect_stdout(out), redirect_stderr(err):
+            result = func(*args, **kwargs)
+        # Ensure trailing buffers are flushed
+        out.flush()
+        err.flush()
+        return result
+
+    # Buffered mode: capture then log
     stdout_buffer = StringIO()
     stderr_buffer = StringIO()
-    
-    # Redirect stdout and stderr to buffers
     with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
         result = func(*args, **kwargs)
-    
-    # Get the captured output
+
     stdout_output = stdout_buffer.getvalue()
     stderr_output = stderr_buffer.getvalue()
-    
-    # Log the captured output
+
+    # Normalize carriage returns and split into lines
+    def _iter_lines(text):
+        for line in text.replace('\r', '\n').split('\n'):
+            if line.strip():
+                yield line
+
     if stdout_output.strip():
-        logger.info("Dataset loading output:")
-        for line in stdout_output.strip().split('\n'):
-            if line.strip():
-                logger.info(f"  {line}")
-    
+        logger.info(f"{label}: stdout")
+        for line in _iter_lines(stdout_output):
+            logger.info(line)
+
     if stderr_output.strip():
-        logger.warning("Dataset loading warnings/errors:")
-        for line in stderr_output.strip().split('\n'):
-            if line.strip():
-                logger.warning(f"  {line}")
-    
+        logger.warning(f"{label}: stderr")
+        for line in _iter_lines(stderr_output):
+            logger.warning(line)
+
     return result
 
 def check_gpu_memory():
@@ -261,6 +303,7 @@ def parse_args():
 
     parser.add_argument("--max_len", type=int, default=80, help="max seq len")
     parser.add_argument("--prefetch", type=int, default=3, help="#prefetch batch")
+    parser.add_argument("--data_sample", type=float, default=1.0)
 
     # thread setting
     parser.add_argument("--num_thread", type=int, default=10, help="#thread_loop")
@@ -437,34 +480,20 @@ def encode_batch(batch, encoder):
     max_seq_len = priv_s.size(0)
     batch_size = priv_s.size(1)
 
-    # Remove actions with value 20 (inaction)
-    valid_action_mask = (actions != 20)
-    
-    # Create alternating pattern based on first row
-    # Get the pattern from first row
-    first_row_pattern = valid_action_mask[0]  # Shape: [batch_size, 2]
-    
-    # Create alternating pattern for each sequence
-    # Create a tensor of alternating True/False values for each timestep
-    alternating_timesteps = torch.arange(max_seq_len, device=valid_action_mask.device) % 2 == 0
-    alternating_timesteps = alternating_timesteps.view(-1, 1)  # Shape: [max_seq_len, 1]
-    
-    # Expand first row pattern to match sequence length
-    expanded_pattern = first_row_pattern.unsqueeze(0).expand(max_seq_len, -1, -1)  # Shape: [max_seq_len, batch_size, 2]
-    
-    # Create alternating mask using broadcasting
-    alternating_mask = torch.where(alternating_timesteps.unsqueeze(-1), expanded_pattern, ~expanded_pattern)
-    valid_action_mask = valid_action_mask & alternating_mask
+    # Build a cyclic mask that starts from the first row's acting player per batch
+    P = actions.size(-1)
+    not_inaction = (actions != P*10) #[max_seq_len, batch_size, P]
+    first_row_pattern = not_inaction[0]  # [batch_size, P]
+    start_player = torch.argmax(first_row_pattern.to(torch.int64), dim=-1)  # [batch_size]
+    timesteps = torch.arange(max_seq_len, device=actions.device).view(-1, 1)  # [T, 1]
+    player_indices = (start_player.unsqueeze(0) + timesteps) % P  # [T, B]
+    cyclic_mask = F.one_hot(player_indices, num_classes=P).to(dtype=torch.bool)  # [T, B, P]
+    valid_action_mask = not_inaction & cyclic_mask
 
-    actions = actions[valid_action_mask]
-    actions = actions.view(max_seq_len, batch_size)
-
-    priv_s = priv_s[valid_action_mask]
-    priv_s = priv_s.view(max_seq_len, batch_size, -1)
-    publ_s = publ_s[valid_action_mask]
-    publ_s = publ_s.view(max_seq_len, batch_size, -1)
-    legal_move = legal_move[valid_action_mask]
-    legal_move = legal_move.view(max_seq_len, batch_size, -1)            
+    actions = actions[valid_action_mask].view(max_seq_len, batch_size)
+    priv_s = priv_s[valid_action_mask].view(max_seq_len, batch_size, -1)
+    publ_s = publ_s[valid_action_mask].view(max_seq_len, batch_size, -1)
+    legal_move = legal_move[valid_action_mask].view(max_seq_len, batch_size, -1)            
     
     obs = torch.cat([priv_s, publ_s, legal_move], dim=-1)
     obs_rew = torch.cat([obs, rewards.unsqueeze(-1)], dim=-1)
@@ -478,8 +507,8 @@ def encode_batch(batch, encoder):
 
 def train_mi(args, batch_loader, train_dataset, epochs, beta):    
     # Training Loop
-    encoder = TrajectoryEncoder(obs_dim=1213, action_dim=21, hidden_dim=512, latent_dim=512)
-    decoder = Decoder(latent_dim=512, hidden_dim=512, obs_dim=1212, action_dim=21, reward_dim=1)
+    encoder = TrajectoryEncoder(obs_dim=1694, action_dim=31, hidden_dim=512, latent_dim=512)
+    decoder = Decoder(latent_dim=512, hidden_dim=512, obs_dim=1693, action_dim=31, reward_dim=1)
     # club_estimator = CLUBEstimator(obs_dim=1212, latent_dim=512, hidden_dim=512)
 
     encoder.to(args.train_device, non_blocking=True)
@@ -487,7 +516,7 @@ def train_mi(args, batch_loader, train_dataset, epochs, beta):
     # club_estimator.to(args.train_device, non_blocking=True)
     
     all_params = list(encoder.parameters()) + list(decoder.parameters()) #+ list(club_estimator.parameters())
-    optimizer = optim.Adam(all_params, lr=5e-4)
+    optimizer = optim.Adam(all_params, lr=args.lr)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
 
     ce_loss = nn.CrossEntropyLoss(reduction='mean')
@@ -522,35 +551,21 @@ def train_mi(args, batch_loader, train_dataset, epochs, beta):
             actions = actions_dict["a"]
             max_seq_len = priv_s.size(0)
             batch_size = priv_s.size(1)
+            # Build a cyclic mask that starts from the first row's acting player per batch
+            P = actions.size(-1)
+            not_inaction = (actions != P*10) #[max_seq_len, batch_size, P]
+            first_row_pattern = not_inaction[0]  # [batch_size, P]
+            start_player = torch.argmax(first_row_pattern.to(torch.int64), dim=-1)  # [batch_size]
+            timesteps = torch.arange(max_seq_len, device=actions.device).view(-1, 1)  # [T, 1]
+            player_indices = (start_player.unsqueeze(0) + timesteps) % P  # [T, B]
+            cyclic_mask = F.one_hot(player_indices, num_classes=P).to(dtype=torch.bool)  # [T, B, P]
+            valid_action_mask = not_inaction & cyclic_mask
 
-            # Remove actions with value 20 (inaction)
-            valid_action_mask = (actions != 20)
-            
-            # Create alternating pattern based on first row
-            # Get the pattern from first row
-            first_row_pattern = valid_action_mask[0]  # Shape: [batch_size, 2]
-            
-            # Create alternating pattern for each sequence
-            # Create a tensor of alternating True/False values for each timestep
-            alternating_timesteps = torch.arange(max_seq_len, device=valid_action_mask.device) % 2 == 0
-            alternating_timesteps = alternating_timesteps.view(-1, 1)  # Shape: [max_seq_len, 1]
-            
-            # Expand first row pattern to match sequence length
-            expanded_pattern = first_row_pattern.unsqueeze(0).expand(max_seq_len, -1, -1)  # Shape: [max_seq_len, batch_size, 2]
-            
-            # Create alternating mask using broadcasting
-            alternating_mask = torch.where(alternating_timesteps.unsqueeze(-1), expanded_pattern, ~expanded_pattern)
+            actions = actions[valid_action_mask].view(max_seq_len, batch_size)
 
-            valid_action_mask = valid_action_mask & alternating_mask
-            actions = actions[valid_action_mask]
-            actions = actions.view(max_seq_len, batch_size)
-
-            priv_s = priv_s[valid_action_mask]
-            priv_s = priv_s.view(max_seq_len, batch_size, -1)
-            publ_s = publ_s[valid_action_mask]
-            publ_s = publ_s.view(max_seq_len, batch_size, -1)
-            legal_move = legal_move[valid_action_mask]
-            legal_move = legal_move.view(max_seq_len, batch_size, -1)            
+            priv_s = priv_s[valid_action_mask].view(max_seq_len, batch_size, -1)
+            publ_s = publ_s[valid_action_mask].view(max_seq_len, batch_size, -1)
+            legal_move = legal_move[valid_action_mask].view(max_seq_len, batch_size, -1)            
             
             obs = torch.cat([priv_s, publ_s, legal_move], dim=-1)
             obs_rew = torch.cat([obs, rewards.unsqueeze(-1)], dim=-1)
@@ -627,7 +642,6 @@ def train_mi(args, batch_loader, train_dataset, epochs, beta):
             
             # Clear GPU cache every 10 batches to prevent memory accumulation
             if batch_idx % 10 == 0:
-                torch.cuda.empty_cache()
                 # Check memory usage and log if low
                 free_mem = check_gpu_memory()
                 if free_mem < 10.0:  # Less than 10% free memory
@@ -649,9 +663,8 @@ def train_mi(args, batch_loader, train_dataset, epochs, beta):
         scheduler.step()
         
         # Clear GPU cache more frequently to prevent memory accumulation
-        if epoch % 5 == 0:  # Clear cache every 5 epochs
-            torch.cuda.empty_cache()
-            gc.collect()
+        torch.cuda.empty_cache()
+        gc.collect()
 
         #add the average loss & learning rate to the tensorboard
         summary_writer.add_scalar('loss', avg_loss, epoch)
@@ -688,7 +701,7 @@ def train_mi(args, batch_loader, train_dataset, epochs, beta):
             best_decoder = decoder
             logger.info(f"New best model at epoch {epoch} with loss: {best_loss:.6f}")
             
-        if epoch % 100 == 0:
+        if epoch > 0 and epoch % 100 == 0:
             try:
                 save_cluster_path = os.path.join(args.clu_mod_dir, f'best_cluster.pt')
                 model_save_path = os.path.join(args.clu_mod_dir, f'best_model.pt')
@@ -783,8 +796,10 @@ def load_cluster(cluster_save_path, model_save_path, args):
         cluster_centers_tensor = cluster_centers.to(args.train_device)
         
         # Load the BC agent model if available and not already loaded from command line
-        encoder = TrajectoryEncoder(obs_dim=1213, action_dim=21, hidden_dim=512, latent_dim=512)
-        encoder.load_state_dict(torch.load(model_save_path)['encoder'])
+        encoder = TrajectoryEncoder(obs_dim=1694, action_dim=31, hidden_dim=512, latent_dim=512)
+        checkpoint = torch.load(model_save_path, map_location=torch.device(args.train_device))
+        encoder.load_state_dict(checkpoint['encoder'])
+        # encoder.load_state_dict(torch.load(model_save_path)['encoder'])
         encoder = encoder.to(args.train_device)
         encoder.eval()
         print("Successfully loaded encoder")
@@ -843,7 +858,7 @@ def adaptive_kmeans_clustering(batch_loader, encoder, args, min_k=2, max_k=10):
         postfix = {'k': k, 'score': score}
         epoch_bar.set_postfix(postfix)
 
-    print(f"Adaptive KMeans picked k={best_k} with silhouette score={best_score:.4f}")
+    logger.info(f"\n\nAdaptive KMeans picked k={best_k} with silhouette score={best_score:.4f}\n\n")    
     return best_kmeans
 
 def plot_tsne(batch_loader, cluster_save_path, model_save_path, args):
@@ -893,7 +908,7 @@ if __name__ == "__main__":
     logger.info("="*50)
     logger.info(f"Device: {args.train_device}")
     logger.info(f"Batch size: {args.batchsize}")
-    logger.info(f"Learning rate: 5e-4")
+    logger.info(f"Learning rate: {args.lr}")
     logger.info(f"Epochs: {args.num_epoch}")
     logger.info(f"Beta (KL weight): {args.beta}")
     logger.info(f"Required consecutive epochs for early stopping: {args.reqd_con_eps}")
@@ -911,6 +926,8 @@ if __name__ == "__main__":
         train_dataset = LoadDataset(args)
         return train_dataset.load()
     
+    # log all the lines printed by load_dataset_data function
+    # publ_s, priv_s, legal_move, h0, action, reward, bootstrap, terminal, seq_len = load_dataset_data()
     publ_s, priv_s, legal_move, h0, action, reward, bootstrap, terminal, seq_len = capture_and_log_output(logger, load_dataset_data)
     
     # Calculate actual rewards (this might also have output)
@@ -931,7 +948,7 @@ if __name__ == "__main__":
         prefetch_factor=args.prefetch
     )
     # Check if cluster information already exists
-    # train_mi(args, batch_loader, train_dataset, epochs=args.num_epoch, beta=args.beta)
+    train_mi(args, batch_loader, train_dataset, epochs=args.num_epoch, beta=args.beta)
     cluster_save_path = os.path.join(args.clu_mod_dir, 'best_cluster.pt')
     model_save_path = os.path.join(args.clu_mod_dir, 'best_model.pt')
     # encoder, cluster_centers_tensor = load_cluster(cluster_save_path, model_save_path, args)
