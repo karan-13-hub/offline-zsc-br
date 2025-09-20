@@ -24,7 +24,7 @@ from create import create_envs, create_threads
 from eval import evaluate
 import common_utils
 import rela
-import r2d2
+import r2d2_br
 import utils
 from process_data import save_replay_buffer
 from replay_load import PrioritizedReplayBuffer
@@ -116,7 +116,7 @@ def parse_args():
     parser.add_argument("--num_eval_after", type=int, default=100)
     parser.add_argument("--save_model_after", type=int, default=100)
     parser.add_argument("--actor_sync_freq", type=int, default=10)
-    parser.add_argument("--dataset_path", type=str, default="/data/kmirakho/offline-model/dataset_rl_1040640_sml.npz")
+    parser.add_argument("--dataset_path", nargs='*', default=None)
 
     #behaviour policy
     parser.add_argument("--bc", type=bool, default=False)
@@ -125,6 +125,7 @@ def parse_args():
     #CQL
     parser.add_argument("--cql", type=bool, default=False)
     parser.add_argument("--cql_weight", type=float, default=0.0)
+    parser.add_argument("--data_sample", type=float, default=1.0)
 
 
     args = parser.parse_args()
@@ -185,7 +186,7 @@ if __name__ == "__main__":
     # print(games[0].feature_size(args.sad))
     # print(games[0].num_action())
 
-    agent = r2d2.R2D2Agent(
+    agent = r2d2_br.R2D2Agent(
         (args.method == "vdn"),
         args.multi_step,
         args.gamma,
@@ -343,7 +344,7 @@ if __name__ == "__main__":
             # print("sample time: ", time.time() - start)
 
             start = time.time()
-            loss, priority, online_q = agent.loss(batch, args.aux_weight, stat, args.bc, args.bc_weight, args.cql, args.cql_weight)
+            sp_loss, bc_loss, cql_loss, priority, online_q, _, _ = agent.loss(batch, args.aux_weight, stat, args.bc, args.cql)
             # print("loss time: ", time.time() - start)
 
             if clone_bot is not None and args.clone_weight > 0:
@@ -351,28 +352,38 @@ if __name__ == "__main__":
                     online_q, batch, args.clone_t, clone_bot, stat
                 )
                 loss = loss + bc_loss * args.clone_weight
+            
+            #bc loss
+            bc_loss = args.bc_weight*bc_loss
+            #cql loss
+            cql_loss = args.cql_weight*cql_loss
+
+            loss = sp_loss + bc_loss * args.bc_weight + cql_loss * args.cql_weight
+            g_norm = torch.nn.utils.clip_grad_norm_(
+                agent.online_net.parameters(), args.grad_clip
+            )
+
             loss = (loss * weight).mean()
             loss.backward()
 
             torch.cuda.synchronize()
-            stopwatch.time("forward & backward")
+            stopwatch.time("forward & backward")\
 
-            g_norm = torch.nn.utils.clip_grad_norm_(
-                agent.online_net.parameters(), args.grad_clip
-            )
             optim.step()
             optim.zero_grad()
 
-            torch.cuda.synchronize()
-            stopwatch.time("update model")
-
+            stat["loss"].feed(loss.detach().mean().item())
+            stat["grad_norm"].feed(g_norm)
+            stat["bc_loss"].feed(bc_loss.detach().mean().item())
+            stat["cql_loss"].feed(cql_loss.detach().mean().item())
+            stat["sp_loss"].feed(sp_loss.detach().mean().item())
             # start = time.time()
             # replay_buffer.update_priorities(priority)   
             # stopwatch.time("updating priority")
             # print("update priority time: ", time.time() - start)
-
-            stat["loss"].feed(loss.detach().item())
-            stat["grad_norm"].feed(g_norm)
+            torch.cuda.synchronize()
+            stopwatch.time("update model")
+            
             # stat["boltzmann_t"].feed(batch.obs["temperature"][0].mean())
 
             # Add periodically to track memory usage
