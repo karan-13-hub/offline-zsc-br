@@ -33,10 +33,10 @@ from replay_load import PrioritizedReplayBuffer
 from replay_load import LoadDataset, DataLoader, process_batch
 from replay_load import ChunkedDataLoader
 from tqdm import tqdm
-from losses import td_error_br, diversity_loss
+from losses import td_error_br, diversity_loss, diversity_loss_single_agent
 import gc   
 import common_utils
-import utils
+import utils_sim_br
 from train_mi import *
 
 def parse_args():
@@ -321,6 +321,7 @@ if __name__ == "__main__":
                 device=args.train_device
             )
             print(f"BR Agent eval score: {score:.4f}, perfect: {perfect * 100:.2f}%")
+
     agents = []
     if args.load_coop_model and args.load_coop_model != "None":
         print("*****loading pretrained coop agent model*****")
@@ -376,14 +377,14 @@ if __name__ == "__main__":
             agents[i] = agents[i].to(args.train_device)
     
     # Create a single optimizer for all agents
-    all_parameters = []
-    if args.br_train:
-        all_parameters.extend(list(agent_br.online_net.parameters()))
     
     if args.coop_train:
+        agents_optim = []
         for agent in agents:
-            all_parameters.extend(list(agent.online_net.parameters()))
-    optim = torch.optim.Adam(all_parameters, lr=args.lr, eps=args.eps)
+            agents_optim.append(torch.optim.Adam(agent.online_net.parameters(), lr=args.lr, eps=args.eps))
+    
+    if args.br_train:
+        agent_br_optim = torch.optim.Adam(agent_br.online_net.parameters(), lr=args.lr, eps=args.eps)
 
     if args.br_train:
         eval_agent = agent_br.clone(args.train_device, {"vdn": False, "boltzmann_act": False})
@@ -412,8 +413,13 @@ if __name__ == "__main__":
     frame_stat["num_acts"] = 0
     frame_stat["num_buffer"] = 0
 
-    stat = common_utils.MultiCounter(args.save_dir)
-    
+    if args.br_train:
+        stat_br = common_utils.MultiCounter(args.save_dir)
+    if args.coop_train:
+        stat_coop = []
+        for i in range(args.num_agents):
+            stat_coop.append(common_utils.MultiCounter(args.save_dir))
+
     tachometer = utils_sim_br.Tachometer()
     stopwatch = common_utils.Stopwatch()
     
@@ -427,7 +433,7 @@ if __name__ == "__main__":
         encoder, cluster_centers_tensor = load_cluster(cluster_save_path, model_save_path, args)
     else:
         #train the mi model
-        encoder, cluster_centers_tensor = train_mi(args, batch_loader=batch_loader, epochs=110, beta=0.0)
+        encoder, cluster_centers_tensor = train_mi(args, batch_loader=batch_loader, train_dataset=train_dataset, epochs=110, beta=0.0)
         plot_tsne(batch_loader, cluster_save_path, model_save_path, args)
         encoder.eval()
     
@@ -489,7 +495,11 @@ if __name__ == "__main__":
         # print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
         tachometer.start()
-        stat.reset()
+        if args.br_train:
+            stat_br.reset()
+        if args.coop_train:
+            for i in range(args.num_agents):
+                stat_coop[i].reset()
         stopwatch.reset()
         # if epoch % args.load_after == 0:
         #     chunked_loader.load_next_chunk()
@@ -547,7 +557,7 @@ if __name__ == "__main__":
                 agent_weights = torch.from_numpy(agent_weights).to(args.train_device)
                 if args.coop_train:
                     # Calculate loss for this agent
-                    loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight, stat, args.bc, args.cql)
+                    loss, bc_loss, cql_loss, priority, online_q, lstm_o, mask = agents[i].loss(batch, args.aux_weight,  stat_coop[i], args.bc, args.cql)
                 
                     # Process online_q values
                     max_len = online_q.shape[0]
@@ -629,64 +639,58 @@ if __name__ == "__main__":
                     result['cql_loss_cp']
                 ))
                 
-            # Aggregate all agent losses with their weights
-            loss_sp = sum([loss_tuple[0] for loss_tuple in agent_losses])
-            loss_bc = sum([loss_tuple[1] for loss_tuple in agent_losses])
-            loss_cql = sum([loss_tuple[2] for loss_tuple in agent_losses])
-
-            # Apply the agent's loss calculation (already parallelized)
-            loss_cp_rl = sum([loss_tuple[3] for loss_tuple in agent_losses])
-            loss_cp_bc = agent_losses[0][4]
-            loss_cp_cql = agent_losses[0][5]
             mask = agent_results[0]['mask']
-            loss_cp = loss_cp_rl + loss_cp_bc + loss_cp_cql
-
-            loss_div = torch.zeros(len(weight), device=args.train_device)
             if args.coop_train:
-                if args.div and args.div_weight > 0:
-                    # Calculate diversity loss separately for each agent, with that agent's Q-values having gradients
-                    agent_div_losses = []
-                    div_loss = diversity_loss(online_q_values, mask, args)
-                    agent_loss_weights = torch.stack(agent_loss_weights)
-                    div_loss = agent_loss_weights * div_loss
-                    div_loss = div_loss.mean(dim=-1)
+                # Sum the diversity losses from all agents
+                g_norm_agents = []
+                for i in range(args.num_agents):
+                    if args.div and args.div_weight > 0:
+                        # Calculate diversity loss for this specific agent against all others
+                        # Detach other agents' Q-values to avoid gradient graph conflicts
+                        other_q_values = [online_q_values[j].clone().detach() for j in range(args.num_agents) if j != i]
+                        loss_div = diversity_loss_single_agent(online_q_values[i], other_q_values, mask, args)
+                        loss_div = args.div_weight * agent_loss_weights[i] * loss_div
+                    else:
+                        loss_div = torch.zeros(len(weight), device=args.train_device)
                     
-                    # Sum the diversity losses from all agents
-                    loss_div = args.div_weight * div_loss.sum()
-                                
-            loss = loss_cp + loss_sp + loss_bc + loss_cql - loss_div
+                    loss = agent_losses[i][0] + agent_losses[i][1] + agent_losses[i][2] - loss_div
+                    loss = (loss * weight).mean()
+                    agents_optim[i].zero_grad()
+                    loss.backward()
+                    g_norm_agents.append(torch.nn.utils.clip_grad_norm_(agents[i].online_net.parameters(), args.grad_clip))
+                    agents_optim[i].step()
+                    
+                    # Stats tracking
+                    stat_coop[i][f"Coop-agent {i} Self-play loss"].feed(agent_losses[i][0].mean().detach().item())
+                    stat_coop[i][f"Coop-agent {i} Behavior Cloning loss"].feed(agent_losses[i][1].mean().detach().item())
+                    stat_coop[i][f"Coop-agent {i} CQL loss"].feed(agent_losses[i][2].mean().detach().item())
+                    stat_coop[i][f"Coop-agent {i} Diversity loss"].feed(loss_div.mean().detach().item())
+                    stat_coop[i][f"Coop-agent {i} loss"].feed(loss.detach().item())
+                    stat_coop[i][f"Coop-agent {i} grad_norm"].feed(g_norm_agents[i])
             
-            # Weight by importance sampling weights and take mean
-            loss = (loss * weight).mean()
-            loss.backward()
-            
-            # Stats tracking
-            stat["Coop-agents Self-play loss"].feed(loss_sp.mean().detach().item())
-            stat["Coop-agents Behavior Cloning loss"].feed(loss_bc.mean().detach().item())
-            stat["Coop-agents CQL loss"].feed(loss_cql.mean().detach().item())
-            stat["Coop-agents Diversity loss"].feed(loss_div.mean().detach().item())
-            stat["BR-agent Cross-play loss"].feed(loss_cp_rl.mean().detach().item())
-            stat["BR-agent Behavior Cloning loss"].feed(loss_cp_bc.mean().detach().item())
-            stat["BR-agent CQL loss"].feed(loss_cp_cql.mean().detach().item())
-            stat["loss"].feed(loss.detach().item())
+            if args.br_train:
+                # Apply the agent's loss calculation (already parallelized)
+                loss_cp_rl = sum([loss_tuple[3] for loss_tuple in agent_losses])
+                loss_cp_bc = agent_losses[0][4]
+                loss_cp_cql = agent_losses[0][5]
+                loss_cp = loss_cp_rl + loss_cp_bc + loss_cp_cql
+                loss_cp = (loss_cp * weight).mean()
+                loss_cp.backward()
+                g_norm_br = torch.nn.utils.clip_grad_norm_(agent_br.online_net.parameters(), args.grad_clip)
+                agent_br_optim.step()
+                agent_br_optim.zero_grad()
+                stat["BR-agent Cross-play loss"].feed(loss_cp_rl.mean().detach().item())
+                stat["BR-agent Behavior Cloning loss"].feed(loss_cp_bc.mean().detach().item())
+                stat["BR-agent CQL loss"].feed(loss_cp_cql.mean().detach().item())
+                stat["BR-agent loss"].feed(loss_cp.detach().item())
+                stat["BR-agent grad_norm"].feed(g_norm_br)
 
             torch.cuda.synchronize()
             stopwatch.time("forward & backward")
 
-            # g_norm = torch.nn.utils.clip_grad_norm_(
-                # agent_br.online_net.parameters(), args.grad_clip
-            # )
-            g_norm = torch.nn.utils.clip_grad_norm_(
-                all_parameters, args.grad_clip
-            )
-            optim.step()
-            optim.zero_grad()
-
             torch.cuda.synchronize()
             stopwatch.time("update model")
-
-            stat["grad_norm"].feed(g_norm)
-
+    
             del batch, weight
             if batch_idx % 100 == 0:
                 torch.cuda.empty_cache()
@@ -695,7 +699,11 @@ if __name__ == "__main__":
         print("EPOCH: %d" % epoch)
         # tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, count_factor)
         stopwatch.summary()
-        stat.summary(epoch)
+        if args.br_train:
+            stat_br.summary(epoch)
+        if args.coop_train:
+            for i in range(args.num_agents):
+                stat_coop[i].summary(epoch)
 
         if epoch % args.num_eval_after == 0:
             eval_seed = (9917 + epoch * 999999) % 7777777

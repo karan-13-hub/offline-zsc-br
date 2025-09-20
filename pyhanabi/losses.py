@@ -464,6 +464,45 @@ def train_br_agent_parallel_manual(agent_br, agents, agent_weights, batch, args)
     return cp_loss
 
 
+def diversity_loss_single_agent(agent_q_values, other_q_values, mask, args):
+    """
+    Calculate diversity loss for a single agent against all other agents.
+    
+    Args:
+        agent_q_values: Q-value tensor for the current agent
+        other_q_values: List of Q-value tensors for other agents
+        mask: valid action mask for all agents
+        args: Arguments containing diversity loss configuration
+        
+    Returns:
+        diversity_loss: Scalar tensor containing the calculated diversity loss for this agent
+    """
+    # Check if we have at least one other agent to compare with
+    if len(other_q_values) < 1 or agent_q_values is None:
+        return torch.tensor(0.0, device=agent_q_values.device)
+    
+    # For JSD (Jensen-Shannon Divergence), calculate divergence for this agent
+    if args.div_type == 'jsd':
+        # Only select Q-values that are not None
+        valid_other_q_values = [q for q in other_q_values if q is not None]
+        if len(valid_other_q_values) < 1:
+            return torch.tensor(0.0, device=agent_q_values.device)
+            
+        # Convert all Q-values to probability distributions
+        all_q_values = [agent_q_values] + valid_other_q_values
+        q_probs = torch.stack([nn.functional.softmax(q, dim=-1) for q in all_q_values], dim=0)
+        q_log_probs = torch.stack([nn.functional.log_softmax(q, dim=-1) for q in all_q_values], dim=0)
+        
+        # Calculate the average probability distribution (detached to avoid gradient issues)
+        avg_probs = q_probs.detach().mean(dim=0)  # Average of all agents
+        avg_log = torch.log(avg_probs + 1e-10)  # Add small epsilon to avoid log(0)
+
+        # Calculate KL divergence from this agent's distribution to the average of others
+        jsd_loss = ((q_log_probs[0] - avg_log) * q_probs[0]).sum(dim=-1)
+        jsd_loss = (jsd_loss * mask).sum(dim=0)  # Apply mask and sum over sequence
+        
+        return jsd_loss
+
 def diversity_loss(q_values, mask, args):
     """
     Calculate diversity loss between Q-values from different agents.
@@ -474,175 +513,165 @@ def diversity_loss(q_values, mask, args):
         args: Arguments containing diversity loss configuration
         
     Returns:
-        diversity_loss: Tensor containing the calculated diversity loss
+        diversity_loss: Tensor containing the calculated diversity loss for each agent
     """
     # Check if we have at least two Q-value tensors to compare
     if len(q_values) < 2 or q_values[0] is None:
         return torch.tensor(0.0, device=q_values[0].device if q_values[0] is not None else "cpu")
     
-    # Get the action dimension from the agent_ID's Q-value tensor
+    # Get the action dimension from the first Q-value tensor
     action_dim = q_values[0].size(-1)
     
-    # Selectively detach Q-values of all agents except agent_ID
-    processed_q_values = []
-    for _, q in enumerate(q_values):
-        processed_q_values.append(q.clone().detach())
-    
-    # For JSD, we'll only include agent_ID and calculate its divergence from others
+    # For JSD (Jensen-Shannon Divergence), calculate divergence for each agent
     if args.div_type == 'jsd':
         # Only select Q-values that are not None
-        valid_q_values = [q for q in processed_q_values if q is not None]
+        valid_q_values = [q for q in q_values if q is not None]
         if len(valid_q_values) < 2:
-            return torch.tensor(0.0, device=processed_q_values[0].device)
+            return torch.tensor(0.0, device=q_values[0].device)
             
         # Convert all Q-values to probability distributions
         q_probs = torch.stack([nn.functional.softmax(q, dim=-1) for q in valid_q_values], dim=0)
         q_log_probs = torch.stack([nn.functional.log_softmax(q, dim=-1) for q in valid_q_values], dim=0)
-        actual_q_probs = torch.stack([nn.functional.softmax(q, dim=-1) for q in q_values], dim=0)
-        actual_q_log_probs = torch.stack([nn.functional.log_softmax(q, dim=-1) for q in q_values], dim=0)
         
-        # Calculate the average probability distribution
-        avg_probs = q_probs.mean(dim=0)
-        avg_log = torch.log(avg_probs + 1e-10).detach()  # Add small epsilon to avoid log(0)
+        # Calculate the average probability distribution (detached to avoid gradient issues)
+        avg_probs = q_probs.clone().detach().mean(dim=0)
+        avg_log = torch.log(avg_probs + 1e-10)  # Add small epsilon to avoid log(0)
+
+        # Calculate JSD loss for each agent independently
+        jsd_losses = []
+        for i in range(len(valid_q_values)):
+            # Calculate KL divergence from this agent's distribution to the average
+            jsd_loss = ((q_log_probs[i] - avg_log) * q_probs[i]).sum(dim=-1)
+            jsd_loss = (jsd_loss * mask).sum(dim=0)  # Apply mask and sum over sequence
+            jsd_losses.append(jsd_loss)
         
-        # Calculate KL divergence from all agent's distribution to the average (JSD component)
-        agent_log_probs = q_log_probs
-        agent_probs = q_probs
-        jsd_loss = ((actual_q_log_probs - avg_log) * actual_q_probs).sum(dim=-1)
-        valid_mask = mask.unsqueeze(0).repeat(actual_q_probs.shape[0], 1, 1)
-        
-        # Apply valid mask to the loss
-        jsd_loss = (jsd_loss * valid_mask).sum(dim=1)
-        
-        return jsd_loss
-    
-    # For other diversity types, use the pairwise approach but only for pairs including agent_ID
-    # Initialize the total diversity loss
-    total_diversity_loss = torch.tensor(0.0, device=processed_q_values[agent_ID].device)
-    
-    # Calculate diversity between agent_ID and all other agents
-    num_pairs = 0
+        return torch.stack(jsd_losses)
+
+    # For other diversity types, use pairwise approach
+    # Initialize the total diversity loss for each agent
+    num_agents = len(q_values)
+    total_diversity_loss = torch.zeros(num_agents, device=q_values[0].device)
     
     # Pre-compute probability distributions and log probabilities
-    q_probs = {}
-    q_log_probs = {}
-    for i, q in enumerate(processed_q_values):
+    q_probs = []
+    q_log_probs = []
+    for q in q_values:
         if q is not None:
-            q_probs[i] = nn.functional.softmax(q, dim=-1)
-            q_log_probs[i] = nn.functional.log_softmax(q, dim=-1)
+            q_probs.append(nn.functional.softmax(q, dim=-1))
+            q_log_probs.append(nn.functional.log_softmax(q, dim=-1))
+        else:
+            q_probs.append(None)
+            q_log_probs.append(None)
     
-    # Agent_ID's Q-values
-    agent_q = processed_q_values[agent_ID]
-    agent_probs = q_probs[agent_ID]
-    agent_log_probs = q_log_probs[agent_ID]
-    
-    # Only calculate diversity between agent_ID and other agents
-    for j, q in enumerate(processed_q_values):
-        if j == agent_ID or q is None:
+    # Calculate diversity between all pairs of agents
+    for i in range(num_agents):
+        if q_values[i] is None:
             continue
             
-        # Extract Q-values
-        other_q = q
-        other_probs = q_probs[j]
-        other_log_probs = q_log_probs[j]
+        agent_q = q_values[i]
+        agent_probs = q_probs[i]
+        agent_log_probs = q_log_probs[i]
         
-        # Select the type of diversity loss
-        if args.div_type == 'ce':
-            # Cross-entropy loss
-            ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
-            ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
-            pair_diversity_loss = ce_loss
+        for j in range(i + 1, num_agents):
+            if q_values[j] is None:
+                continue
+                
+            other_q = q_values[j]
+            other_probs = q_probs[j]
+            other_log_probs = q_log_probs[j]
             
-        elif args.div_type == 'kl':
-            # KL Divergence
-            kl_div_1_2 = nn.functional.kl_div(
-                agent_log_probs, other_probs, reduction='none'
-            ).sum(dim=-1)
-            kl_div_2_1 = nn.functional.kl_div(
-                other_log_probs, agent_probs, reduction='none'
-            ).sum(dim=-1)
-            pair_diversity_loss = kl_div_1_2 + kl_div_2_1
+            # Select the type of diversity loss
+            if args.div_type == 'ce':
+                # Cross-entropy loss
+                ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
+                ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
+                pair_diversity_loss = ce_loss
+                
+            elif args.div_type == 'kl':
+                # KL Divergence
+                kl_div_1_2 = nn.functional.kl_div(
+                    agent_log_probs, other_probs, reduction='none'
+                ).sum(dim=-1)
+                kl_div_2_1 = nn.functional.kl_div(
+                    other_log_probs, agent_probs, reduction='none'
+                ).sum(dim=-1)
+                pair_diversity_loss = kl_div_1_2 + kl_div_2_1
+                
+            elif args.div_type == 'cosine':
+                # Cosine Similarity
+                agent_flat = agent_q.reshape(-1, action_dim)
+                other_flat = other_q.reshape(-1, action_dim)
+                
+                # Normalize the vectors
+                agent_norm = agent_flat / (agent_flat.norm(dim=1, keepdim=True) + 1e-10)
+                other_norm = other_flat / (other_flat.norm(dim=1, keepdim=True) + 1e-10)
+                
+                # Compute cosine similarity
+                cosine_sim = (agent_norm * other_norm).sum(dim=1)
+                pair_diversity_loss = 1.0 - cosine_sim
+                
+            elif args.div_type == 'l2':
+                # L2 Distance
+                pair_diversity_loss = torch.norm(agent_q - other_q, p=2, dim=-1)
+                
+            elif args.div_type == 'combined':
+                # Combined approach using multiple metrics with weights
+                
+                # 1. Cross-entropy loss
+                ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
+                ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
+                
+                # 2. KL Divergence
+                kl_div_1_2 = nn.functional.kl_div(
+                    agent_log_probs, other_probs, reduction='none'
+                ).sum(dim=-1)
+                kl_div_2_1 = nn.functional.kl_div(
+                    other_log_probs, agent_probs, reduction='none'
+                ).sum(dim=-1)
+                kl_div_loss = kl_div_1_2 + kl_div_2_1
+                
+                # 3. Jensen-Shannon Divergence
+                m = 0.5 * (agent_probs + other_probs)
+                m_log = torch.log(m + 1e-10)
+                
+                jsd_loss = 0.5 * (
+                    (agent_log_probs - m_log) * agent_probs
+                ).sum(dim=-1) + 0.5 * (
+                    (other_log_probs - m_log) * other_probs
+                ).sum(dim=-1)
+                
+                # 4. Cosine Similarity
+                agent_flat = agent_q.reshape(-1, action_dim)
+                other_flat = other_q.reshape(-1, action_dim)
+                
+                agent_norm = agent_flat / (agent_flat.norm(dim=1, keepdim=True) + 1e-10)
+                other_norm = other_flat / (other_flat.norm(dim=1, keepdim=True) + 1e-10)
+                
+                cosine_sim = (agent_norm * other_norm).sum(dim=1)
+                cosine_loss = 1.0 - cosine_sim
+                
+                # 5. L2 Distance
+                l2_dist = torch.norm(agent_q - other_q, p=2, dim=-1)
+                
+                # Combine all diversity metrics with weights
+                pair_diversity_loss = (
+                    getattr(args, 'ce_weight', 1.0) * ce_loss +
+                    getattr(args, 'kl_weight', 1.0) * kl_div_loss +
+                    getattr(args, 'jsd_weight', 1.0) * jsd_loss +
+                    getattr(args, 'cosine_weight', 1.0) * cosine_loss +
+                    getattr(args, 'l2_weight', 1.0) * l2_dist
+                )
+            else:
+                # Default to cross-entropy if div_type is not recognized
+                ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
+                ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
+                pair_diversity_loss = ce_loss
             
-        elif args.div_type == 'cosine':
-            # Cosine Similarity
-            agent_flat = agent_q.reshape(-1, action_dim)
-            other_flat = other_q.reshape(-1, action_dim)
+            # Apply valid mask to the pair's diversity loss
+            pair_diversity_loss = (pair_diversity_loss * mask).mean()
             
-            # Normalize the vectors
-            agent_norm = agent_flat / (agent_flat.norm(dim=1, keepdim=True) + 1e-10)
-            other_norm = other_flat / (other_flat.norm(dim=1, keepdim=True) + 1e-10)
-            
-            # Compute cosine similarity
-            cosine_sim = (agent_norm * other_norm).sum(dim=1)
-            pair_diversity_loss = 1.0 - cosine_sim
-            
-        elif args.div_type == 'l2':
-            # L2 Distance
-            pair_diversity_loss = torch.norm(agent_q - other_q, p=2, dim=-1)
-            
-        elif args.div_type == 'combined':
-            # Combined approach using multiple metrics with weights
-            
-            # 1. Cross-entropy loss
-            ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
-            ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
-            
-            # 2. KL Divergence
-            kl_div_1_2 = nn.functional.kl_div(
-                agent_log_probs, other_probs, reduction='none'
-            ).sum(dim=-1)
-            kl_div_2_1 = nn.functional.kl_div(
-                other_log_probs, agent_probs, reduction='none'
-            ).sum(dim=-1)
-            kl_div_loss = kl_div_1_2 + kl_div_2_1
-            
-            # 3. Jensen-Shannon Divergence
-            m = 0.5 * (agent_probs + other_probs)
-            m_log = torch.log(m + 1e-10)
-            
-            jsd_loss = 0.5 * (
-                (agent_log_probs - m_log) * agent_probs
-            ).sum(dim=-1) + 0.5 * (
-                (other_log_probs - m_log) * other_probs
-            ).sum(dim=-1)
-            
-            # 4. Cosine Similarity
-            agent_flat = agent_q.reshape(-1, action_dim)
-            other_flat = other_q.reshape(-1, action_dim)
-            
-            agent_norm = agent_flat / (agent_flat.norm(dim=1, keepdim=True) + 1e-10)
-            other_norm = other_flat / (other_flat.norm(dim=1, keepdim=True) + 1e-10)
-            
-            cosine_sim = (agent_norm * other_norm).sum(dim=1)
-            cosine_loss = 1.0 - cosine_sim
-            
-            # 5. L2 Distance
-            l2_dist = torch.norm(agent_q - other_q, p=2, dim=-1)
-            
-            # Combine all diversity metrics with weights
-            pair_diversity_loss = (
-                args.ce_weight * ce_loss +
-                args.kl_weight * kl_div_loss +
-                args.jsd_weight * jsd_loss +
-                args.cosine_weight * cosine_loss +
-                args.l2_weight * l2_dist
-            )
-        else:
-            # Default to cross-entropy if div_type is not recognized
-            ce_loss = -(agent_log_probs * other_probs).sum(dim=-1)
-            ce_loss = ce_loss + -(other_log_probs * agent_probs).sum(dim=-1)
-            pair_diversity_loss = ce_loss
-        
-        # Apply valid masks to the pair's diversity loss
-        valid_mask = valid_masks[agent_ID] & valid_masks[j]  # Only consider positions where both agents have valid actions
-        pair_diversity_loss = (pair_diversity_loss * valid_mask).mean()
-        
-        # Add this pair's diversity loss to the total
-        total_diversity_loss += pair_diversity_loss
-        num_pairs += 1
-    
-    # Average the diversity loss across all pairs
-    if num_pairs > 0:
-        total_diversity_loss = total_diversity_loss / num_pairs
+            # Add this pair's diversity loss to both agents
+            total_diversity_loss[i] += pair_diversity_loss
+            total_diversity_loss[j] += pair_diversity_loss
     
     return total_diversity_loss
