@@ -154,6 +154,8 @@ def parse_args():
 
     parser.add_argument("--coop_sync_freq", type=int, default=0)
     parser.add_argument("--mode", type=str, default="selfplay")
+    parser.add_argument("--update_coop_agents", type=bool, default=False)
+    parser.add_argument("--update_coop_agents_freq", type=int, default=0)
 
     args = parser.parse_args()
     return args
@@ -500,6 +502,16 @@ if __name__ == "__main__":
                 stat_agents[i].reset()
                 tachometer_agents[i].start()
                 stopwatch_agents[i].reset()
+        
+        if args.update_coop_agents and epoch % args.update_coop_agents_freq == 0:
+            for i in range(len(args.load_model)):
+                #load new coop agents
+                model_path = args.load_model[i].split("epoch_")[0] + "epoch_" + str(epoch) + ".pthw"
+                if os.path.exists(model_path):
+                    utils.load_weight(coop_agents[i].online_net, model_path, args.train_device)
+                    print(f"Updated model for coop agent {i}: {model_path}")
+            act_group.update_coop_models(coop_agents)
+            print(f"*****done*****\n\n")
 
         for batch_idx in tqdm(range(args.epoch_len), desc=f'Training', bar_format='{l_bar}{bar:20}{r_bar}', leave=True):
             num_update = batch_idx + epoch * args.epoch_len
@@ -518,22 +530,6 @@ if __name__ == "__main__":
                     act_group.update_coop_models(coop_agents)
                     for i in range(len(args.load_model)):
                         act_group_agents[i].update_model(coop_agents[i])
-                # print(f"Updated model for BR agent and {len(args.load_model)} coop agents")
-            # if args.coop_sync_freq and num_update % args.coop_sync_freq == 0:
-            #     print(f">>>step {num_update}, sync models")
-            #     if save_future is None or save_future.done():
-            #         save_future = sync_pool.submit(
-            #             utils.save_intermediate_model,
-            #             copy.deepcopy(agent_br.online_net.state_dict()),
-            #             save_ckpt,
-            #         )
-            #     if coop_agents is not None and (
-            #         coop_future is None or coop_future.done()
-            #     ):
-            #         coop_future = sync_pool.submit(
-            #             utils.update_intermediate_coop_agents, coop_ckpts, act_group
-            #         )
-            #     print(f"<<<step {num_update}, sync done")
 
             torch.cuda.synchronize()
             stopwatch.time("sync and updating")

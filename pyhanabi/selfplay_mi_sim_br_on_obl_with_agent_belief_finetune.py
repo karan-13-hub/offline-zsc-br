@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument("--num_t", type=int, default=80)
     parser.add_argument("--hide_action", type=int, default=0)
     parser.add_argument("--off_belief", type=int, default=0)
-    parser.add_argument("--belief_model", type=str, default="None")
+    parser.add_argument("--belief_model", type=str, nargs="+", default="")
     parser.add_argument("--num_fict_sample", type=int, default=10)
     parser.add_argument("--belief_device", type=str, default="cuda:1")
     parser.add_argument("--load_br_model", type=str, default="")
@@ -140,6 +140,10 @@ def parse_args():
     parser.add_argument("--cp_bc_weight", type=float, default=0.0)
     parser.add_argument("--cp_bc_decay_factor", type=float, default=0.0)
     parser.add_argument("--cp_bc_decay_start", type=int, default=0, help="Number of epochs to decay bc_weight from initial value to eps")
+    parser.add_argument("--update_coop_agents_freq", type=int, default=0)
+    parser.add_argument("--update_coop_agents_belief_freq", type=int, default=0)
+    parser.add_argument("--update_coop_agents", type=bool, default=False)
+    parser.add_argument("--update_coop_agents_belief", type=bool, default=False)
 
     #sp, cp, cp weights
     parser.add_argument("--cp", type=bool, default=False)
@@ -436,15 +440,15 @@ if __name__ == "__main__":
 
 
     belief_model = None
-    belief_model = []
     if args.belief_model != "None":
+        belief_model = []
         if args.finetune_coop_agents_belief:
             optim_belief = []
-        belief_model_files = os.listdir(args.belief_model)
-        belief_model_files = sorted(belief_model_files)
+        # belief_model_files = os.listdir(args.belief_model)
+        # belief_model_files = sorted(belief_model_files)
         belief_devices = args.act_device.split(",")
-        for i, belief_model_file in enumerate(belief_model_files):
-            belief_model_pth = os.path.join(args.belief_model, belief_model_file, 'latest.pthw')
+        for i, belief_model_file in enumerate(args.belief_model):
+            belief_model_pth = belief_model_file
             # if "belief" not in belief_model_file:
             #     continue
             print(f"load belief model from belief model : {belief_model_pth} on device {args.train_device}")
@@ -646,6 +650,24 @@ if __name__ == "__main__":
                 stat_coop_agents_belief[i].reset()
                 tachometer_coop_agents_belief[i].start()
                 stopwatch_coop_agents_belief[i].reset()
+        if args.update_coop_agents and epoch % args.update_coop_agents_freq == 0:
+            for i in range(len(args.load_model)):
+                #load new coop agents
+                model_path = args.load_model[i].split("epoch_")[0] + "epoch_" + str(epoch) + ".pthw"
+                if os.path.exists(model_path):
+                    utils.load_weight(coop_agents[i].online_net, model_path, args.train_device)
+                    print(f"Updated model for coop agent {i}: {model_path}")
+            act_group.update_coop_models(coop_agents)
+            print(f"*****done*****\n\n")
+        if args.update_coop_agents_belief and epoch % args.update_coop_agents_belief_freq == 0:
+            for i in range(len(belief_model)):
+                #load new belief model
+                model_path = args.belief_model[i].split("epoch_")[0] + "epoch_" + str(epoch+50) + ".pthw"
+                if os.path.exists(model_path):
+                    utils.load_weight(belief_model[i], model_path, args.train_device)
+                    print(f"Updated belief model {i}: {model_path}")
+            act_group.update_belief_models(belief_model)
+            print(f"*****done*****\n\n")
 
         for batch_idx in tqdm(range(args.epoch_len), desc=f'Training', bar_format='{l_bar}{bar:20}{r_bar}', leave=True):
             num_update = batch_idx + epoch * args.epoch_len
@@ -663,13 +685,14 @@ if __name__ == "__main__":
                 if args.finetune_coop_agents:
                     for i in range(len(args.load_model)):
                         act_group_agents[i].update_model(coop_agents[i]) 
+                if args.finetune_coop_agents_belief:
+                    act_group.update_belief_models(belief_model)
                                
             if num_update % args.coop_agent_belief_sync_freq == 0:
                 if args.finetune_coop_agents:
                     act_group.update_coop_models(coop_agents)
                 if args.finetune_coop_agents_belief:
-                    act_group.update_belief_models(belief_model)
-                
+                    act_group.update_belief_models(belief_model)                
                 print(f"Synced coop agents and belief models with BR act group")
 
             torch.cuda.synchronize()
