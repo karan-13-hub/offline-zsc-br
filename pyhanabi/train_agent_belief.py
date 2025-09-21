@@ -343,6 +343,11 @@ if __name__ == "__main__":
     stat_agent = common_utils.MultiCounter(args.save_dir)
     tachometer_agent = utils.Tachometer()
     stopwatch_agent = common_utils.Stopwatch()
+
+    #create a new directory for saving belief model
+    belief_save_dir = os.path.join(args.save_dir, "belief")
+    if not os.path.exists(belief_save_dir):
+        os.makedirs(belief_save_dir)
     
     for epoch in range(args.num_epoch):
         print("beginning of epoch: ", epoch)
@@ -447,20 +452,20 @@ if __name__ == "__main__":
             perfect = 0
 
         force_save_name = None
-        if epoch > 0 and epoch % args.save_model_after == 0:
-            force_save_name = f"model_seed_{args.seed}"
+        if epoch % args.save_model_after == 0:
+            force_save_name = f"belief/belief_seed_{args.seed}_epoch_{epoch}"
         belief_saved = saver.save(
             None,
             model.state_dict(),
             -stat_belief["loss"].mean(),
-            True,
+            False,
             force_save_name=force_save_name,
         )
         print(f"\nBelief model saved: {belief_saved}")
 
         force_save_name = None
-        if epoch > 0 and epoch % args.save_model_after == 0:
-            force_save_name = args.load_model.split("/")[-1].split(".")[0]
+        if epoch % args.save_model_after == 0:
+            force_save_name = f"model_seed_{args.seed}_epoch_{epoch}"
         agent_saved = saver.save(
             None, agent.online_net.state_dict(), score, force_save_name=force_save_name,
         )

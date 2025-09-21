@@ -6,13 +6,13 @@
 #
 #!/bin/bash
 python train_agent_belief.py \
-       --save_dir exps/belief_9_42_1234_TRY/agent_0 \
+       --save_dir /data/kmirakho/hanabi_2p/exps/br_medium_data_seed_9_42_111_777_1234_31337/iql_finetune_cp_bc_0.4_coop/agent_1 \
        --num_thread 80 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
        --num_update_between_sync 2500\
        --method iql \
-       --seed 9 \
+       --seed 42 \
        --sad 0 \
        --act_base_eps 0.1 \
        --act_eps_alpha 7 \
@@ -29,14 +29,15 @@ python train_agent_belief.py \
        --burn_in_frames 10000 \
        --replay_buffer_size 131072 \
        --epoch_len 1000 \
-       --num_epoch 501 \
+       --num_epoch 2001 \
        --multi_step 3 \
        --explore 1 \
        --num_eval_after 1 \
-       --policy exps/br_medium_data_seed_9_42_1234/vdn_cp_bc_0.35_finetune/agent_0/model_seed_9_agent_0_epoch_150.pthw \
+       --policy /data/kmirakho/hanabi_2p/exps/br_medium_data_seed_9_42_111_777_1234_31337/vdn_cp_bc_0.4_coop/model_seed_9_agent_1_epoch_200.pthw \
        --num_player 2 \
        --shuffle_color 0 \
        --save_model_after 100 \
-       --train_device cuda:0 \
-       --act_device cuda:7 \
+       --train_device cuda:1 \
+       --act_device cuda:2\
+       --save_model_after 50 \
        # --off_belief 1 \
