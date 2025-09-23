@@ -6,7 +6,7 @@
 #
 #!/bin/bash
 python selfplay_wo_rb.py \
-       --save_dir /data/kmirakho/hanabi_2p/exps/br_expert_data_seed_9_42_1234/BR_cp_bc_1.0_BR\
+       --save_dir /home/zaboreno/hanabi_2p/exps/br_expert_data_seed_9_42_1234/BR_cp_bc_1.0_BR\
        --num_thread 80 \
        --num_game_per_thread 80 \
        --num_data_thread 4 \
@@ -40,7 +40,7 @@ python selfplay_wo_rb.py \
        --bc True \
        --bc_weight 1.0 \
        --train_device cuda:0 \
-       --dataset_path /data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_9/data_1280 /data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_42/data_1280 /data/kmirakho/hanabi_2p/data/vdn_offline_data_seed_1234/data_1280 \
+       --dataset_path /home/zaboreno/hanabi_2p/data/vdn_offline_data_seed_9/data_1280 /home/zaboreno/hanabi_2p/data/vdn_offline_data_seed_42/data_1280 /home/zaboreno/hanabi_2p/data/vdn_offline_data_seed_1234/data_1280 \
        --data_sample 0.75\
        # --cql True \
        # --cql_weight 1.0 \
