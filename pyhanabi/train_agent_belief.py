@@ -82,6 +82,7 @@ def parse_args():
     parser.add_argument("--num_thread", type=int, default=40, help="#thread_loop")
     parser.add_argument("--num_game_per_thread", type=int, default=20)
     parser.add_argument("--num_eval_after", type=int, default=100)
+    parser.add_argument("--start_epoch", type=int, default=0)
 
     # load from dataset setting
     parser.add_argument("--dataset", type=str, default="")
@@ -349,7 +350,7 @@ if __name__ == "__main__":
     if not os.path.exists(belief_save_dir):
         os.makedirs(belief_save_dir)
     
-    for epoch in range(args.num_epoch):
+    for epoch in range(args.start_epoch, args.num_epoch):
         print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
         tachometer_belief.start()
