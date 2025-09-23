@@ -7,7 +7,7 @@
 #!/bin/bash
 python selfplay_mi_sim_br_on_obl_with_agent_belief_finetune.py \
        --save_dir /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/final_vdn_on_cp_obl_finetune\
-       --load_br_model /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111/BR_cp_bc_1.0/model_seed_9_epoch_100.pth\
+       --load_br_model /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111/BR_cp_bc_1.0/model_seed_9_epoch_100.pthw\
        --load_model /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_0/model_seed_9_epoch_0.pthw /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_1/model_seed_42_epoch_0.pthw /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_2/model_seed_111_epoch_0.pthw\
        --belief_model /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_0/belief/belief_seed_9_epoch_50.pthw /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_1/belief/belief_seed_42_epoch_50.pthw /home/zaboreno/hanabi_3p/exps/br_expert_data_seed_9_42_111_777_1234_31337/iql_cp_bc_0.4_finetune/agent_2/belief/belief_seed_111_epoch_50.pthw\
        --num_thread 80 \
