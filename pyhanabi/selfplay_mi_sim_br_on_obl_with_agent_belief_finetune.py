@@ -452,7 +452,7 @@ if __name__ == "__main__":
             # if "belief" not in belief_model_file:
             #     continue
             print(f"load belief model from belief model : {belief_model_pth} on device {args.train_device}")
-            belief_config = utils.get_train_config(belief_model_pth)
+            belief_config = utils.get_train_config(args.load_model[i])
             belief_model.append(
                 ARBeliefModel.load(
                     belief_model_pth,
