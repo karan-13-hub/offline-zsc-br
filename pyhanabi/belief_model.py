@@ -124,7 +124,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
 
     @classmethod
     def load(cls, weight_file, device, hand_size, num_sample, fc_only):
-        state_dict = torch.load(weight_file)
+        state_dict = torch.load(weight_file, map_location=device)
         hid_dim, in_dim = state_dict["net.0.weight"].size()
         out_dim = state_dict["fc.weight"].size(0)
         model = cls(device, in_dim, hid_dim, hand_size, out_dim, num_sample, fc_only)
