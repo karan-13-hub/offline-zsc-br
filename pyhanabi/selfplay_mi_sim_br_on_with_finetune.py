@@ -147,6 +147,7 @@ def parse_args():
     parser.add_argument("--div_weight", type=float, default=1.0)
     parser.add_argument("--div_type", type=str, default='jsd')
     parser.add_argument("--start_div", type=int, default=0, help="Epoch to start using div_weight (before this, div_weight is 0)")
+    parser.add_argument("--start_epoch", type=int, default=0, help="Number of epochs to start training")
 
     #loading trained diverse agents
     parser.add_argument("--include", type=str, nargs="+", default=None)
@@ -491,7 +492,7 @@ if __name__ == "__main__":
             tachometer_agents.append(utils.Tachometer())
             stopwatch_agents.append(common_utils.Stopwatch())
 
-    for epoch in range(args.num_epoch):
+    for epoch in range(args.start_epoch, args.num_epoch):
         print("beginning of epoch: ", epoch)
         print(common_utils.get_mem_usage())
         tachometer.start()
