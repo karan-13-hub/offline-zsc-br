@@ -72,7 +72,7 @@ class LSTMNet(torch.jit.ScriptModule):
         c0 = obs["c0"].transpose(0, 1).contiguous()
 
         s = obs["s"].unsqueeze(0)
-        assert s.size(2) == self.in_dim
+        assert s.size(2) == self.in_dim, f"{s.size(2)} != {self.in_dim}"
         # get private/public feature
         priv_s = s[:, :, -self.priv_in_dim :]
         publ_s = s[:, :, -self.publ_in_dim :]
@@ -259,6 +259,7 @@ class V0BeliefNet(torch.jit.ScriptModule):
 
 ## main program ##
 parser = argparse.ArgumentParser(description="")
+parser.add_argument("--save_path", type=str, default=None)
 parser.add_argument("--model", type=str, default=None)
 parser.add_argument("--clone_model", type=str, default=None)
 parser.add_argument("--belief_model", type=str, default=None)
@@ -269,6 +270,11 @@ if args.model is not None:
     device = "cuda"
     agent, cfg = utils.load_agent(args.model, {"device": device})
     print("after loading model")
+    print("in_dim: ", agent.online_net.in_dim[0])
+    print("hid_dim: ", agent.online_net.hid_dim)
+    print("out_dim: ", agent.online_net.out_dim)
+    print("num_lstm_layer: ", agent.online_net.num_lstm_layer)
+    print("hide_action: ", cfg["hide_action"])
     search_model = LSTMNet(
         device,
         agent.online_net.in_dim[0],
@@ -281,7 +287,10 @@ if args.model is not None:
     utils.load_weight(
         search_model, None, device, state_dict=agent.online_net.state_dict()
     )
-    save_path = args.model.rsplit(".", 1)[0] + ".sparta"
+    if not os.path.exists(args.save_path):
+        os.makedirs(args.save_path)
+    model_name = args.model.split("/")[-1].split(".")[0]
+    save_path = os.path.join(args.save_path, model_name + ".sparta")
     print("saving model to:", save_path)
     torch.jit.save(search_model, save_path)
 
